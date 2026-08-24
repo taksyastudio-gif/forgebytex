@@ -3,7 +3,7 @@
   "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!google60f88397bab2c922\\.html$).*)",
       "destination": "/index.html"
     }
   ],
