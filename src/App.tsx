@@ -54,15 +54,6 @@ const INITIAL_TERMINAL_LOGS = [
   'Select a file or press "Run Code" to execute.',
 ];
 
-type NebCompileResult = {
-  id: string;
-  title: string;
-  language: SupportedLanguage;
-  success: boolean;
-  output?: string;
-  error?: string;
-};
-
 const BUGGY_C_CODE = `#include <stdio.h>
 
 int main() {
@@ -115,6 +106,8 @@ export const App: React.FC = () => {
   const [terminalLogs, setTerminalLogs] = useState<string[]>(
     INITIAL_TERMINAL_LOGS
   );
+  const [queuedInput, setQueuedInput] = useState('');
+  const [terminalInput, setTerminalInput] = useState('');
 
   const [htmlPreviewDoc, setHtmlPreviewDoc] =
     useState<string | null>(null);
@@ -136,6 +129,30 @@ export const App: React.FC = () => {
     useState<string>('1');
 
   /* ============================================================
+     EDITOR REFERENCES
+  ============================================================ */
+
+  const monacoRef =
+    useRef<typeof import('monaco-editor') | null>(
+      null
+    );
+  const editorRef =
+    useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(
+      null
+    );
+
+  const handleEditorMount = useCallback(
+    (
+      editor: import('monaco-editor').editor.IStandaloneCodeEditor,
+      monaco: typeof import('monaco-editor')
+    ) => {
+      editorRef.current = editor;
+      monacoRef.current = monaco;
+    },
+    []
+  );
+
+  /* ============================================================
      ERROR STATE
   ============================================================ */
 
@@ -147,6 +164,19 @@ export const App: React.FC = () => {
 
   const [showRawError, setShowRawError] =
     useState(false);
+
+  const clearErrorState = useCallback(() => {
+    setErrors([]);
+    setSelectedErrorId(null);
+    setShowRawError(false);
+
+    if (monacoRef.current && editorRef.current) {
+     clearMonacoMarkers(
+       monacoRef.current,
+       editorRef.current
+     );
+    }
+  }, []);
 
   /* ============================================================
      RESIZER STATE
@@ -272,9 +302,7 @@ export const App: React.FC = () => {
        */
       setActiveLanguage(selectedFile.language);
 
-      setErrors([]);
-      setSelectedErrorId(null);
-      setShowRawError(false);
+      clearErrorState();
 
       /*
        * Avoid showing an old HTML preview after changing files.
@@ -287,9 +315,6 @@ export const App: React.FC = () => {
   /* ============================================================
      CODE CHANGE
   ============================================================ */
-
-  const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
-  const editorRef = useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(null);
 
   const handleCodeChange = useCallback(
     (newContent: string) => {
@@ -312,18 +337,7 @@ export const App: React.FC = () => {
        * Editing invalidates previous diagnostics.
        * Clear UI markers as well.
        */
-      setErrors([]);
-      setSelectedErrorId(null);
-
-      if (
-        monacoRef.current &&
-        editorRef.current
-      ) {
-        clearMonacoMarkers(
-          monacoRef.current,
-          editorRef.current
-        );
-      }
+      clearErrorState();
     },
     [activeFile]
   );
@@ -361,9 +375,7 @@ export const App: React.FC = () => {
 
     setIsRunning(true);
 
-    setErrors([]);
-    setSelectedErrorId(null);
-    setShowRawError(false);
+    clearErrorState();
 
     setTerminalLogs((previousLogs) => [
       ...previousLogs,
@@ -389,17 +401,48 @@ export const App: React.FC = () => {
      * OTHER LANGUAGES: invoke real compiler client to compile and run.
      */
 
+    const stdin = (terminalInput || queuedInput).trim();
+    setQueuedInput('');
+    setTerminalInput('');
+
     compilerClient
-      .compile(activeFile.content, '')
+      .compile(activeFile.content, stdin)
       .then((result) => {
         setTerminalLogs((previousLogs) => [
           ...previousLogs,
           result.output || 'No output.',
         ]);
 
-        if (!result.success && result.error) {
+        if (result.success && result.warnings) {
+          const friendly = interpretCompilerOutput(result.warnings);
+          setErrors(friendly);
+
+          if (
+            monacoRef.current &&
+            editorRef.current
+          ) {
+            applyMonacoMarkers(
+              monacoRef.current,
+              editorRef.current,
+              friendly
+            );
+
+            if (friendly.length > 0) {
+              const first = friendly[0];
+              goToLineColumn(
+                editorRef.current,
+                first.line,
+                first.column
+              );
+              setSelectedErrorId(first.id);
+            }
+          }
+          return;
+        }
+
+        if (!result.success) {
           const friendly = interpretCompilerOutput(
-            result.error
+            result.error || result.output || 'Compilation failed.'
           );
 
           setErrors(friendly);
@@ -424,6 +467,8 @@ export const App: React.FC = () => {
               setSelectedErrorId(first.id);
             }
           }
+        } else {
+          clearErrorState();
         }
       })
       .catch((err) => {
@@ -439,14 +484,17 @@ export const App: React.FC = () => {
     activeFile,
     activeLanguage,
     isRunning,
+    queuedInput,
+    terminalInput,
   ]);
-
   /* ============================================================
      CLEAR TERMINAL
   ============================================================ */
 
   const handleClearTerminal = useCallback(() => {
     setTerminalLogs([]);
+    setQueuedInput('');
+    setTerminalInput('');
     setHtmlPreviewDoc(null);
   }, []);
 
@@ -475,8 +523,7 @@ export const App: React.FC = () => {
       )
     );
 
-    setErrors([]);
-    setSelectedErrorId(null);
+    clearErrorState();
     setHtmlPreviewDoc(null);
 
     setTerminalLogs((previousLogs) => [
@@ -578,8 +625,7 @@ export const App: React.FC = () => {
     ]);
 
     setActiveFileId(newFile.id);
-    setErrors([]);
-    setSelectedErrorId(null);
+    clearErrorState();
     setHtmlPreviewDoc(null);
 
     setTerminalLogs((previousLogs) => [
@@ -608,8 +654,7 @@ export const App: React.FC = () => {
     setActiveFileId(newFile.id);
     setActiveLanguage(newFile.language);
 
-    setErrors([]);
-    setSelectedErrorId(null);
+    clearErrorState();
     setHtmlPreviewDoc(null);
 
     setTerminalLogs((previousLogs) => [
@@ -679,59 +724,6 @@ export const App: React.FC = () => {
         onReset={handleReset}
         onNewFile={handleNewFile}
         onExport={handleExport}
-        onOpenNebModal={() => setIsNebModalOpen(true)}
-        onRunNebTests={async () => {
-          setTerminalLogs((prev) => [...prev, 'Starting NEB tests (in-app)...']);
-
-          const results: NebCompileResult[] = [];
-
-          for (const p of nebPrograms) {
-            if (p.language !== 'c') {
-              results.push({ id: p.id, title: p.title, language: p.language, success: false, error: 'skipped-non-c' });
-              continue;
-            }
-
-            setTerminalLogs((prev) => [...prev, `Compiling ${p.id}...`]);
-
-            try {
-              compilerClient.terminate();
-            } catch {
-              // The compiler may already be terminated.
-            }
-
-            await new Promise((r) => setTimeout(r, 200));
-
-            try {
-              const res = await compilerClient.compile(p.content, '');
-              results.push({ id: p.id, title: p.title, language: p.language, success: res.success, output: res.output, error: res.error });
-
-              setTerminalLogs((prev) => [...prev, `${p.id}: ${res.success ? 'OK' : 'FAILED'} - ${res.error ?? ''}`]);
-            } catch (err) {
-              results.push({ id: p.id, title: p.title, language: p.language, success: false, error: String(err) });
-              setTerminalLogs((prev) => [...prev, `${p.id}: ERROR - ${String(err)}`]);
-            }
-
-            // small delay between runs
-            await new Promise((r) => setTimeout(r, 200));
-          }
-
-          // download report
-          try {
-            const reportJson = JSON.stringify(results, null, 2);
-            const blob = new Blob([reportJson], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'neb-compile-report.json';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            URL.revokeObjectURL(url);
-            setTerminalLogs((prev) => [...prev, 'NEB tests completed. Report downloaded.']);
-          } catch (e) {
-            setTerminalLogs((prev) => [...prev, `Failed to download report: ${String(e)}`]);
-          }
-        }}
         onLanguageSelect={handleLanguageSelect}
         onThemeSelect={setActiveTheme}
       />
@@ -770,10 +762,7 @@ export const App: React.FC = () => {
               language={activeLanguage}
               theme={activeTheme}
               onChange={handleCodeChange}
-              onMount={(editor, monaco) => {
-                editorRef.current = editor;
-                monacoRef.current = monaco;
-              }}
+              onMount={handleEditorMount}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
@@ -831,12 +820,18 @@ export const App: React.FC = () => {
             activeLanguage={activeLanguage}
             terminalLogs={terminalLogs}
             htmlPreviewDoc={htmlPreviewDoc}
-            onSendInput={(input) =>
+            inputValue={terminalInput}
+            onInputChange={setTerminalInput}
+            onSendInput={(input) => {
+              setQueuedInput((previous) => {
+                const next = previous ? `${previous}\n${input}` : input;
+                return next;
+              });
               setTerminalLogs((previousLogs) => [
                 ...previousLogs,
                 `> ${input}`,
-              ])
-            }
+              ]);
+            }}
             onClearTerminal={handleClearTerminal}
           />
 

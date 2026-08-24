@@ -24,6 +24,7 @@ type CompileResult = {
   success: boolean;
   output: string;
   error?: string;
+  warnings?: string;
 };
 
 type WorkerResponse = {
@@ -32,6 +33,7 @@ type WorkerResponse = {
   success: boolean;
   output: string;
   error?: string;
+  warnings?: string;
 };
 
 type CompilerInstance = Awaited<ReturnType<typeof Clang>>;
@@ -43,58 +45,54 @@ const textEncoder = new TextEncoder();
    TOOLCHAIN CACHE
 ============================================================ */
 
-let clangPromise: Promise<CompilerInstance> | null = null;
-let lldPromise: Promise<LinkerInstance> | null = null;
 let sysrootPromise: Promise<ArrayBuffer> | null = null;
 
 /* ============================================================
    LOAD CLANG
 ============================================================ */
 
-const getClang = async (): Promise<CompilerInstance> => {
-  if (!clangPromise) {
-    clangPromise = (Clang({
-      thisProgram: 'clang',
+const getClang = async (
+  onStderr?: (text: string) => void
+): Promise<CompilerInstance> => {
+  return (Clang({
+   thisProgram: 'clang',
+   printErr: (text: string) => {
+     if (onStderr) {
+       onStderr(text);
+     }
+   },
+   locateFile: (path: string) => {
+     if (path.endsWith('clang.wasm')) {
+       return '/clang.wasm';
+     }
 
-      locateFile: (path: string) => {
-        if (path.endsWith('clang.wasm')) {
-          return '/clang.wasm';
-        }
-
-        return path;
-      },
-    }) as Promise<CompilerInstance>).catch((error: unknown) => {
-      clangPromise = null;
-      throw error;
-    });
-  }
-
-  return clangPromise;
+     return path;
+   },
+  }) as Promise<CompilerInstance>);
 };
 
 /* ============================================================
    LOAD LLD
 ============================================================ */
 
-const getLld = async (): Promise<LinkerInstance> => {
-  if (!lldPromise) {
-    lldPromise = (LLD({
-      thisProgram: 'wasm-ld',
+const getLld = async (
+  onStderr?: (text: string) => void
+): Promise<LinkerInstance> => {
+  return (LLD({
+   thisProgram: 'wasm-ld',
+   printErr: (text: string) => {
+     if (onStderr) {
+       onStderr(text);
+     }
+   },
+   locateFile: (path: string) => {
+     if (path.endsWith('lld.wasm')) {
+       return '/lld.wasm';
+     }
 
-      locateFile: (path: string) => {
-        if (path.endsWith('lld.wasm')) {
-          return '/lld.wasm';
-        }
-
-        return path;
-      },
-    }) as Promise<LinkerInstance>).catch((error: unknown) => {
-      lldPromise = null;
-      throw error;
-    });
-  }
-
-  return lldPromise;
+     return path;
+   },
+  }) as Promise<LinkerInstance>);
 };
 
 /* ============================================================
@@ -194,8 +192,12 @@ async function compileAndRun(
 
     const [clang, lld, sysroot] =
       await Promise.all([
-        getClang(),
-        getLld(),
+        getClang((text: string) => {
+          compilerStderr += text + '\n';
+        }),
+        getLld((text: string) => {
+          linkerStderr += text + '\n';
+        }),
         getSysroot(),
       ]);
 
@@ -236,10 +238,6 @@ async function compileAndRun(
     /* ========================================================
        5. COMPILE C → OBJECT
     ========================================================= */
-
-    clang.printErr = (text: string) => {
-      compilerStderr += text + '\n';
-    };
 
     const clangExitCode =
       clang.callMain(
@@ -291,10 +289,6 @@ async function compileAndRun(
     /* ========================================================
        9. LINK OBJECT → WASM
     ========================================================= */
-
-    lld.printErr = (text: string) => {
-      linkerStderr += text + '\n';
-    };
 
     const lldExitCode =
       lld.callMain(
@@ -604,9 +598,12 @@ async function compileAndRun(
       };
     }
 
+    const compilerWarnings = compilerStderr.trim();
+
     return {
       success: true,
       output,
+      warnings: compilerWarnings || undefined,
     };
   } catch (error) {
     const message =
@@ -665,6 +662,7 @@ self.addEventListener(
         success: result.success,
         output: result.output,
         error: result.error,
+        warnings: result.warnings,
       };
 
       self.postMessage(response);
@@ -680,6 +678,7 @@ self.addEventListener(
         success: false,
         output: message,
         error: message,
+        warnings: undefined,
       };
 
       self.postMessage(response);

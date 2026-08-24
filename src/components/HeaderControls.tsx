@@ -8,7 +8,6 @@ import {
   Trash2,
   TriangleAlert,
   Square,
-  BookOpen,
 } from 'lucide-react';
 
 import type {
@@ -27,8 +26,6 @@ interface HeaderControlsProps {
   onReset: () => void;
   onNewFile: () => void;
   onExport: () => void;
-  onOpenNebModal: () => void;
-  onRunNebTests?: () => void;
 
   onLanguageSelect: (lang: SupportedLanguage) => void;
   onThemeSelect: (theme: EditorTheme) => void;
@@ -124,8 +121,6 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
   onReset,
   onNewFile,
   onExport,
-  onOpenNebModal,
-  onRunNebTests,
   onLanguageSelect,
   onThemeSelect,
 }) => {
@@ -590,25 +585,28 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
         <div className="ml-auto flex shrink-0 items-center gap-2">
           {/* Theme */}
 
-          <select
-            value={activeTheme}
-            onChange={(event) =>
-              onThemeSelect(
-                event.target.value as EditorTheme
-              )
-            }
-            aria-label="Editor theme"
-            className="hidden cursor-pointer rounded-xl border border-slate-700/80 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-slate-300 outline-none transition-colors hover:bg-slate-800 focus:border-indigo-500/60 sm:block"
-          >
-            {THEMES.map((theme) => (
-              <option
-                key={theme.id}
-                value={theme.id}
-              >
-                {theme.label}
-              </option>
-            ))}
-          </select>
+          <div className="relative">
+            <select
+              value={activeTheme}
+              onChange={(event) =>
+                onThemeSelect(
+                  event.target.value as EditorTheme
+                )
+              }
+              aria-label="Editor theme"
+              className="appearance-none cursor-pointer rounded-xl border border-slate-700/80 bg-slate-900/90 px-2.5 py-1.5 pr-8 text-xs font-medium text-slate-200 outline-none transition-all hover:border-indigo-500/60 hover:bg-slate-800 focus:border-indigo-500/60 focus:ring-2 focus:ring-indigo-500/20"
+            >
+              {THEMES.map((theme) => (
+                <option
+                  key={theme.id}
+                  value={theme.id}
+                >
+                  {theme.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" size={14} />
+          </div>
 
           {/* Language */}
 
@@ -803,23 +801,6 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            onClick={onOpenNebModal}
-            aria-label="Open NEB Grade 12 library"
-            className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 transition-all hover:bg-slate-800 active:scale-95"
-          >
-            <BookOpen size={13} />
-
-            <span className="hidden sm:inline">
-              NEB 12 Codes
-            </span>
-
-            <span className="sm:hidden">
-              NEB
-            </span>
-          </button>
-
-          <button
-            type="button"
             onClick={onNewFile}
             aria-label="Create new file"
             className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 transition-all hover:bg-slate-800 active:scale-95"
@@ -851,25 +832,6 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
               Export
             </span>
           </button>
-
-          {onRunNebTests && (
-            <button
-              type="button"
-              onClick={onRunNebTests}
-              aria-label="Run NEB tests"
-              className="ml-2 flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-600/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-600/20 active:scale-95"
-            >
-              <BookOpen size={13} />
-
-              <span className="hidden sm:inline">
-                Run NEB Tests
-              </span>
-
-              <span className="sm:hidden">
-                Test
-              </span>
-            </button>
-          )}
         </div>
       </div>
     </header>

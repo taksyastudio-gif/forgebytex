@@ -5,87 +5,157 @@ export interface FriendlyError {
   message: string;
   raw: string;
   explanation: string;
+  severity: 'error' | 'warning';
 }
+
+const formatMessage = (rawMessage: string): string => {
+  const clean = (rawMessage || '').replace(/\s+/g, ' ').trim();
+  if (!clean) {
+    return 'Compilation failed.';
+  }
+  return clean;
+};
+
+const buildExplanation = (rawText: string, level: 'error' | 'warning'): string => {
+  if (/expected ['"]?;['"]? at end of declaration|expected ['"]?;['"]? before|missing semicolon/i.test(rawText)) {
+    return 'A statement is missing its terminating semicolon (;). Add the semicolon at the end of the statement on the highlighted line.';
+  }
+
+  if (/expected ['"]?\)['"]?/.test(rawText) || /to match this \(/i.test(rawText)) {
+    return 'The compiler expected a closing parenthesis here. Check the opening ( in the same expression and close it before continuing.';
+  }
+
+  if (/expected ['"]?\}['"]?/.test(rawText) || /to match this \{/.test(rawText)) {
+    return 'A block is missing its closing brace (}). Check the opening { and make sure every block closes properly.';
+  }
+
+  if (/undeclared identifier|implicitly declaring|unknown type|not declared in scope/i.test(rawText)) {
+    return 'This name is being used before it is declared, or it is spelled differently than the declaration.';
+  }
+
+  if (/call to undeclared function|implicit function declaration/i.test(rawText)) {
+    return 'This function was called before it was defined or declared. Add a prototype or define the function before use.';
+  }
+
+  if (/redefinition of|previous definition is here/i.test(rawText)) {
+    return 'This variable is declared more than once in the same scope. Keep only one declaration for each variable.';
+  }
+
+  if (/too few arguments to function call|expected .* have .*/i.test(rawText)) {
+    return 'This function call is missing one or more required arguments. Check the function signature and provide the correct number of arguments.';
+  }
+
+  if (/incompatible pointer to integer conversion|incompatible integer to pointer conversion|incompatible types|cannot convert/i.test(rawText)) {
+    return 'The value being assigned does not match the variable type. Use a value of the correct type for this variable.';
+  }
+
+  if (/format specifies type|[-Wformat]|%f.*int|%d.*double/i.test(rawText)) {
+    return 'The format string does not match the variable type. Use a format specifier that matches the value being printed.';
+  }
+
+  if (/(cannot find|undefined reference|linker|file not found)/i.test(rawText)) {
+    return 'The compiler or linker could not find a required symbol or file. Check the function names, includes, and project setup.';
+  }
+
+  if (level === 'warning') {
+    return 'This is a compiler warning. The code may still compile, but it may be doing something unexpected or unsafe.';
+  }
+
+  return 'The compiler reported a problem in this code. Check the highlighted line and the surrounding statements.';
+};
 
 export function interpretCompilerOutput(rawOutput: string): FriendlyError[] {
   const errors: FriendlyError[] = [];
 
   if (!rawOutput) return errors;
 
-  // Split into lines and group multi-line diagnostics.
-  const lines = rawOutput.split('\n');
+  const normalized = rawOutput.trim();
+  if (!normalized) return errors;
 
-  let current: { header?: string; block: string[] } | null = null;
+  const lines = normalized.split(/\r?\n/);
+  let current: { block: string[]; level: 'error' | 'warning' | null } | null = null;
   let idCounter = 0;
 
   const pushCurrent = () => {
-    if (!current || !current.header) return;
+    if (!current || current.level === null) return;
 
-    const header = current.header;
     const block = current.block.join('\n');
+    const header = current.block[0] || '';
+    const match = header.match(/(?:.*?:)?(\d+):(\d+):\s*(warning|error|fatal error):?\s*(.*)/i);
 
-    // match header like: file.c:12:5: error: something
-    const match = header.match(/(?:.*?:)?(\d+):(\d+):\s*(warning|error|fatal error|note):?\s*(.*)/i);
-
-    if (match) {
-      const lineNum = parseInt(match[1], 10);
-      const colNum = parseInt(match[2], 10);
-      const level = match[3].toLowerCase();
-      const msg = match[4] || '';
-
-      const explanation = (() => {
-        if (/stdio\.h/i.test(block) || /undefined reference to `printf'/.test(block)) {
-          return "Missing or incorrect stdio usage; check includes and linkage.";
-        }
-        if (/malloc|free|segmentation fault|abort/i.test(block)) {
-          return 'Possible memory error or invalid pointer/memory access.';
-        }
-        return level === 'warning' ? 'Compiler warning; code may still compile.' : 'Compilation or runtime error. See raw output.';
-      })();
-
-      errors.push({
-        id: `err-${idCounter++}`,
-        line: lineNum,
-        column: colNum,
-        message: msg || block.split('\n')[0] || level,
-        raw: block,
-        explanation,
-      });
+    if (!match) {
+      current = null;
+      return;
     }
+
+    const line = Number(match[1]);
+    const column = Number(match[2]);
+    const level = match[3].toLowerCase().includes('warning') ? 'warning' : 'error';
+    const message = formatMessage(match[4] || current.block.slice(1).join(' ') || 'Compilation failed.');
+    const explanation = buildExplanation(block, level);
+
+    errors.push({
+      id: `err-${idCounter++}`,
+      line,
+      column,
+      message,
+      raw: block,
+      explanation,
+      severity: level,
+    });
 
     current = null;
   };
 
   for (const line of lines) {
-    const headerMatch = line.match(/(?:.*?:)?(\d+):(\d+):\s*(warning|error|fatal error|note):/i);
-    if (headerMatch) {
-      // Start a new block
+    const diagnosticHeader = line.match(/(?:.*?:)?(\d+):(\d+):\s*(warning|error|fatal error|note):/i);
+
+    if (diagnosticHeader) {
       pushCurrent();
-      current = { header: line, block: [line] };
-    } else if (current) {
-      // continuation of previous diagnostic block
+      current = { block: [line], level: diagnosticHeader[3].toLowerCase().includes('warning') ? 'warning' : 'error' };
+      continue;
+    }
+
+    if (current) {
       current.block.push(line);
-    } else {
-      // orphan lines: try to match simple single-line errors
-      const simple = line.match(/(?:.*?:)?(\d+):(\d+):\s*(?:fatal\s+)?error:\s*(.*)/i);
-      if (simple) {
-        const lineNum = parseInt(simple[1], 10);
-        const colNum = parseInt(simple[2], 10);
-        const msg = simple[3];
-        errors.push({
-          id: `err-${idCounter++}`,
-          line: lineNum,
-          column: colNum,
-          message: msg,
-          raw: line,
-          explanation: 'Compilation error detected.',
-        });
-      }
+      continue;
+    }
+
+    const bareDiagnostic = line.match(/(?:.*?:)?(\d+):(\d+):(?:\s*(?:fatal\s+)?error:)?\s*(.*)/i);
+    if (bareDiagnostic) {
+      const lineNumber = Number(bareDiagnostic[1]);
+      const columnNumber = Number(bareDiagnostic[2]);
+      const message = formatMessage(bareDiagnostic[3]);
+      errors.push({
+        id: `err-${idCounter++}`,
+        line: lineNumber,
+        column: columnNumber,
+        message,
+        raw: line,
+        explanation: buildExplanation(line, 'error'),
+        severity: 'error',
+      });
     }
   }
 
-  // push last
   pushCurrent();
+
+  if (errors.length === 0) {
+    const firstMeaningful = normalized
+      .split(/\r?\n/)
+      .find((line) => line.trim().length > 0) || normalized;
+
+    const message = formatMessage(firstMeaningful);
+    errors.push({
+      id: `err-${idCounter++}`,
+      line: 1,
+      column: 1,
+      message,
+      raw: normalized,
+      explanation: 'The compiler reported a diagnostic that ForgeByte could not confidently match to a standard beginner-friendly pattern. Review the raw compiler message and the highlighted line.',
+      severity: 'error',
+    });
+  }
 
   return errors;
 }

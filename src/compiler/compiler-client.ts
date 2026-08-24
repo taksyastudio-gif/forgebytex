@@ -9,6 +9,7 @@ export type CompileResult = {
   success: boolean;
   output: string;
   error?: string;
+  warnings?: string;
 };
 
 type WorkerResponse = {
@@ -17,16 +18,19 @@ type WorkerResponse = {
   success: boolean;
   output: string;
   error?: string;
+  warnings?: string;
 };
 
 type PendingRequest = {
   resolve: (result: CompileResult) => void;
   reject: (error: Error) => void;
+  worker: Worker;
 };
 
 class CompilerClient {
-  private worker: Worker | null = null;
   private pendingRequests = new Map<string, PendingRequest>();
+  private pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly requestTimeoutMs = 30000;
 
   private createWorker(): Worker {
     const worker = new Worker(
@@ -52,12 +56,25 @@ class CompilerClient {
     return worker;
   }
 
-  private ensureWorker(): Worker {
-    if (!this.worker) {
-      this.worker = this.createWorker();
+  private removeRequest(requestId: string): void {
+    const pending = this.pendingRequests.get(requestId);
+    if (!pending) {
+      return;
     }
 
-    return this.worker;
+    this.pendingRequests.delete(requestId);
+
+    const timeoutId = this.pendingTimeouts.get(requestId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      this.pendingTimeouts.delete(requestId);
+    }
+
+    try {
+      pending.worker.terminate();
+    } catch {
+      // Ignore worker teardown errors.
+    }
   }
 
   private handleMessage = (
@@ -77,12 +94,13 @@ class CompilerClient {
       return;
     }
 
-    this.pendingRequests.delete(data.requestId);
+    this.removeRequest(data.requestId);
 
     pending.resolve({
       success: data.success,
       output: data.output,
       error: data.error,
+      warnings: data.warnings,
     });
   };
 
@@ -95,9 +113,6 @@ class CompilerClient {
     );
 
     this.rejectAllPending(error);
-
-    this.worker?.terminate();
-    this.worker = null;
   };
 
   private handleMessageError = (): void => {
@@ -106,16 +121,23 @@ class CompilerClient {
     );
 
     this.rejectAllPending(error);
-
-    this.worker?.terminate();
-    this.worker = null;
   };
 
   private rejectAllPending(error: Error): void {
+    for (const timeoutId of this.pendingTimeouts.values()) {
+      clearTimeout(timeoutId);
+    }
+
     for (const pending of this.pendingRequests.values()) {
+      try {
+        pending.worker.terminate();
+      } catch {
+        // Ignore worker teardown errors.
+      }
       pending.reject(error);
     }
 
+    this.pendingTimeouts.clear();
     this.pendingRequests.clear();
   }
 
@@ -159,7 +181,7 @@ class CompilerClient {
       });
     }
 
-    const worker = this.ensureWorker();
+    const worker = this.createWorker();
 
     const requestId =
       `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -176,7 +198,28 @@ class CompilerClient {
         this.pendingRequests.set(requestId, {
           resolve,
           reject,
+          worker,
         });
+
+        const timeoutId = setTimeout(() => {
+          if (!this.pendingRequests.has(requestId)) {
+            return;
+          }
+
+          const pending = this.pendingRequests.get(requestId);
+          this.pendingRequests.delete(requestId);
+          this.pendingTimeouts.delete(requestId);
+
+          try {
+            pending?.worker.terminate();
+          } catch {
+            // Ignore worker teardown errors.
+          }
+
+          reject(new Error('Compiler timed out. Please try again.'));
+        }, this.requestTimeoutMs);
+
+        this.pendingTimeouts.set(requestId, timeoutId);
 
         worker.postMessage(request);
       }
@@ -184,12 +227,21 @@ class CompilerClient {
   }
 
   terminate(): void {
-    this.worker?.terminate();
-    this.worker = null;
+    for (const timeoutId of this.pendingTimeouts.values()) {
+      clearTimeout(timeoutId);
+    }
 
-    this.rejectAllPending(
-      new Error('Compiler worker terminated.')
-    );
+    this.pendingTimeouts.clear();
+
+    for (const pending of this.pendingRequests.values()) {
+      try {
+        pending.worker.terminate();
+      } catch {
+        // Ignore worker teardown errors.
+      }
+    }
+
+    this.pendingRequests.clear();
   }
 }
 

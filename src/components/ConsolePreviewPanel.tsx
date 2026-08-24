@@ -1,7 +1,6 @@
 import React, {
   useEffect,
   useRef,
-  useState,
 } from 'react';
 
 import type {
@@ -12,6 +11,8 @@ interface ConsolePreviewPanelProps {
   activeLanguage: SupportedLanguage;
   terminalLogs: string[];
   htmlPreviewDoc: string | null;
+  inputValue: string;
+  onInputChange: (value: string) => void;
   onSendInput: (input: string) => void;
   onClearTerminal: () => void;
 }
@@ -22,12 +23,11 @@ export const ConsolePreviewPanel: React.FC<
   activeLanguage,
   terminalLogs,
   htmlPreviewDoc,
+  inputValue,
+  onInputChange,
   onSendInput,
   onClearTerminal,
 }) => {
-  const [inputVal, setInputVal] =
-    useState('');
-
   const bottomRef =
     useRef<HTMLDivElement>(null);
 
@@ -46,14 +46,14 @@ export const ConsolePreviewPanel: React.FC<
 
     event.preventDefault();
 
-    const value = inputVal.trim();
+    const value = inputValue.trim();
 
     if (!value) {
       return;
     }
 
     onSendInput(value);
-    setInputVal('');
+    onInputChange('');
   };
 
   const isHtml =
@@ -147,8 +147,8 @@ export const ConsolePreviewPanel: React.FC<
           )}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 flex flex-col p-3.5 overflow-hidden bg-[#04060a]">
-          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 font-mono leading-relaxed">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-[#04060a]">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 p-3.5 pb-2 pr-1 font-mono leading-relaxed">
             {terminalLogs.length === 0 ? (
               <div className="text-slate-600 italic">
                 Terminal cleared.
@@ -184,16 +184,16 @@ export const ConsolePreviewPanel: React.FC<
             <div ref={bottomRef} />
           </div>
 
-          <div className="mt-2 pt-2.5 border-t border-slate-800/80 flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 border-t border-slate-800/80 bg-[#080b12]/80 px-3.5 py-2.5 shrink-0">
             <span className="text-sky-400 font-bold">
               &gt;
             </span>
 
             <input
               type="text"
-              value={inputVal}
+              value={inputValue}
               onChange={(event) =>
-                setInputVal(event.target.value)
+                onInputChange(event.target.value)
               }
               onKeyDown={handleKeyDown}
               placeholder="Program input..."

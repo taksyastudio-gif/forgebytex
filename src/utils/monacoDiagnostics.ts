@@ -11,11 +11,16 @@ export function applyMonacoMarkers(
 
   const markers: monaco.editor.IMarkerData[] = errors.map((err) => ({
     startLineNumber: err.line,
-    startColumn: err.column,
+    startColumn: Math.max(1, err.column),
     endLineNumber: err.line,
-    endColumn: err.column + 5,
-    message: `${err.message}\n\n💡 ${err.explanation}`,
-    severity: monacoInstance.MarkerSeverity.Error,
+    endColumn: Math.max(err.column + 1, err.column + 5),
+    message: `${err.message}
+
+?? ${err.explanation}`,
+    severity:
+      err.severity === 'warning'
+        ? monacoInstance.MarkerSeverity.Warning
+        : monacoInstance.MarkerSeverity.Error,
   }));
 
   monacoInstance.editor.setModelMarkers(model, 'compiler', markers);
