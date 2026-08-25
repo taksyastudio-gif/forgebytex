@@ -1,7 +1,6 @@
-import React, {
-  useEffect,
-  useRef,
-} from 'react';
+import React from 'react';
+
+import { InteractiveTerminal } from './InteractiveTerminal';
 
 import type {
   SupportedLanguage,
@@ -11,10 +10,9 @@ interface ConsolePreviewPanelProps {
   activeLanguage: SupportedLanguage;
   terminalLogs: string[];
   htmlPreviewDoc: string | null;
-  inputValue: string;
-  onInputChange: (value: string) => void;
   onSendInput: (input: string) => void;
   onClearTerminal: () => void;
+  isWaitingForInput?: boolean;
 }
 
 export const ConsolePreviewPanel: React.FC<
@@ -23,39 +21,10 @@ export const ConsolePreviewPanel: React.FC<
   activeLanguage,
   terminalLogs,
   htmlPreviewDoc,
-  inputValue,
-  onInputChange,
   onSendInput,
   onClearTerminal,
+  isWaitingForInput = false,
 }) => {
-  const bottomRef =
-    useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({
-      behavior: 'smooth',
-    });
-  }, [terminalLogs]);
-
-  const handleKeyDown = (
-    event: React.KeyboardEvent<HTMLInputElement>
-  ) => {
-    if (event.key !== 'Enter') {
-      return;
-    }
-
-    event.preventDefault();
-
-    const value = inputValue.trim();
-
-    if (!value) {
-      return;
-    }
-
-    onSendInput(value);
-    onInputChange('');
-  };
-
   const isHtml =
     activeLanguage === 'html';
 
@@ -148,57 +117,11 @@ export const ConsolePreviewPanel: React.FC<
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-[#04060a]">
-          <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 p-3.5 pb-2 pr-1 font-mono leading-relaxed">
-            {terminalLogs.length === 0 ? (
-              <div className="text-slate-600 italic">
-                Terminal cleared.
-              </div>
-            ) : (
-              terminalLogs.map((log, index) => {
-                const lower =
-                  log.toLowerCase();
-
-                const className =
-                  log.startsWith('>')
-                    ? 'text-sky-400 font-bold'
-                    : lower.includes('error') ||
-                        lower.includes('failed')
-                    ? 'text-red-400'
-                    : lower.includes(
-                        'process exited'
-                      )
-                    ? 'text-slate-500 italic'
-                    : 'text-emerald-300';
-
-                return (
-                  <div
-                    key={`${log}-${index}`}
-                    className={`whitespace-pre-wrap break-words ${className}`}
-                  >
-                    {log}
-                  </div>
-                );
-              })
-            )}
-
-            <div ref={bottomRef} />
-          </div>
-
-          <div className="flex items-center gap-2 border-t border-slate-800/80 bg-[#080b12]/80 px-3.5 py-2.5 shrink-0">
-            <span className="text-sky-400 font-bold">
-              &gt;
-            </span>
-
-            <input
-              type="text"
-              value={inputValue}
-              onChange={(event) =>
-                onInputChange(event.target.value)
-              }
-              onKeyDown={handleKeyDown}
-              placeholder="Program input..."
-              aria-label="Program input"
-              className="flex-1 min-w-0 bg-transparent text-slate-100 placeholder-slate-600 text-xs focus:outline-none font-mono"
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <InteractiveTerminal
+              terminalLogs={terminalLogs}
+              isWaitingForInput={isWaitingForInput}
+              onInput={onSendInput}
             />
           </div>
         </div>

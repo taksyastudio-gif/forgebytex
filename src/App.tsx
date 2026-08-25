@@ -18,7 +18,10 @@ import { ConsolePreviewPanel } from './components/ConsolePreviewPanel';
 import { FriendlyErrorPanel } from './components/FriendlyErrorPanel';
 import { NebCurriculumModal } from './components/NebCurriculumModal';
 import { nebPrograms } from './data/nebGrade12Curriculum';
-import { compilerClient } from './compiler/compiler-client';
+import {
+  compilerClient,
+  type ExecutionStatus,
+} from './compiler/compiler-client';
 
 import type {
   FileItem,
@@ -101,6 +104,7 @@ export const App: React.FC = () => {
     useState<EditorTheme>('vs-dark');
 
   const [isRunning, setIsRunning] = useState(false);
+  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>('idle');
   const [isNebModalOpen, setIsNebModalOpen] = useState(false);
 
   const [terminalLogs, setTerminalLogs] = useState<string[]>(
@@ -309,7 +313,7 @@ export const App: React.FC = () => {
        */
       setHtmlPreviewDoc(null);
     },
-    [files]
+      [clearErrorState, files]
   );
 
   /* ============================================================
@@ -339,7 +343,7 @@ export const App: React.FC = () => {
        */
       clearErrorState();
     },
-    [activeFile]
+      [activeFile, clearErrorState]
   );
 
   /* ============================================================
@@ -369,11 +373,23 @@ export const App: React.FC = () => {
   ============================================================ */
 
   const handleRun = useCallback(() => {
-    if (!activeFile || isRunning) {
+    if (!activeFile) {
+      return;
+    }
+
+    if (isRunning) {
+      compilerClient.stopCurrent();
+      setIsRunning(false);
+      setExecutionStatus('stopped');
+      setTerminalLogs((previousLogs) => [
+        ...previousLogs,
+        '> Execution stopped.',
+      ]);
       return;
     }
 
     setIsRunning(true);
+    setExecutionStatus('running');
 
     clearErrorState();
 
@@ -382,9 +398,6 @@ export const App: React.FC = () => {
       `> Executing ${activeFile.name}...`,
     ]);
 
-    /*
-     * HTML execution is handled immediately by the preview.
-     */
     if (activeLanguage === 'html') {
       setHtmlPreviewDoc(activeFile.content);
 
@@ -394,24 +407,48 @@ export const App: React.FC = () => {
       ]);
 
       setIsRunning(false);
+      setExecutionStatus('completed');
       return;
     }
-
-    /*
-     * OTHER LANGUAGES: invoke real compiler client to compile and run.
-     */
 
     const stdin = (terminalInput || queuedInput).trim();
     setQueuedInput('');
     setTerminalInput('');
 
     compilerClient
-      .compile(activeFile.content, stdin)
+      .compile(
+        activeFile.content,
+        stdin,
+        (_stream, text) => {
+          setTerminalLogs((previousLogs) => {
+            const normalizedText = text.replace(/\r\n/g, '\n');
+            if (!normalizedText) {
+              return previousLogs;
+            }
+
+            const lastPrompt = previousLogs[previousLogs.length - 1] ?? '';
+            const trimmedText =
+              lastPrompt && normalizedText.startsWith(lastPrompt)
+                ? normalizedText.slice(lastPrompt.length)
+                : normalizedText;
+
+            return [...previousLogs, trimmedText];
+          });
+        },
+        (status) => {
+          setExecutionStatus(status);
+          if (
+            status === 'completed' ||
+            status === 'failed' ||
+            status === 'stopped' ||
+            status === 'timeout'
+          ) {
+            setIsRunning(false);
+          }
+        }
+      )
       .then((result) => {
-        setTerminalLogs((previousLogs) => [
-          ...previousLogs,
-          result.output || 'No output.',
-        ]);
+        setExecutionStatus(result.status ?? (result.success ? 'completed' : 'failed'));
 
         if (result.success && result.warnings) {
           const friendly = interpretCompilerOutput(result.warnings);
@@ -472,17 +509,22 @@ export const App: React.FC = () => {
         }
       })
       .catch((err) => {
+        setExecutionStatus('failed');
         setTerminalLogs((previousLogs) => [
           ...previousLogs,
           `Compiler error: ${String(err)}`,
         ]);
       })
       .finally(() => {
-        setIsRunning(false);
+        if (executionStatus !== 'waiting-input') {
+          setIsRunning(false);
+        }
       });
   }, [
     activeFile,
     activeLanguage,
+    clearErrorState,
+    executionStatus,
     isRunning,
     queuedInput,
     terminalInput,
@@ -496,6 +538,7 @@ export const App: React.FC = () => {
     setQueuedInput('');
     setTerminalInput('');
     setHtmlPreviewDoc(null);
+    setExecutionStatus('idle');
   }, []);
 
   /* ============================================================
@@ -530,7 +573,7 @@ export const App: React.FC = () => {
       ...previousLogs,
       `Buggy ${activeLanguage.toUpperCase()} sample loaded.`,
     ]);
-  }, [activeFile, activeLanguage]);
+  }, [activeFile, activeLanguage, clearErrorState]);
 
   /* ============================================================
      RESET CURRENT FILE
@@ -632,7 +675,7 @@ export const App: React.FC = () => {
       ...previousLogs,
       `Created new ${languageLabel} file: ${filename}`,
     ]);
-  }, [activeLanguage, files]);
+  }, [activeLanguage, clearErrorState, files]);
 
   const handleLoadNebProgram = (program: { id: string; title: string; language: SupportedLanguage; content: string }) => {
     const extension = program.language === 'c' ? 'c' : 'html';
@@ -820,19 +863,16 @@ export const App: React.FC = () => {
             activeLanguage={activeLanguage}
             terminalLogs={terminalLogs}
             htmlPreviewDoc={htmlPreviewDoc}
-            inputValue={terminalInput}
-            onInputChange={setTerminalInput}
             onSendInput={(input) => {
+              compilerClient.sendInput(input);
               setQueuedInput((previous) => {
                 const next = previous ? `${previous}\n${input}` : input;
                 return next;
               });
-              setTerminalLogs((previousLogs) => [
-                ...previousLogs,
-                `> ${input}`,
-              ]);
+              setTerminalInput(input);
             }}
             onClearTerminal={handleClearTerminal}
+            isWaitingForInput={executionStatus === 'waiting-input'}
           />
 
           <NebCurriculumModal

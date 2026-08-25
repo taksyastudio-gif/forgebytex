@@ -20,11 +20,19 @@ type CompileRequest = {
   stdin?: string;
 };
 
+type InputRequest = {
+  type: 'stdin';
+  requestId: string;
+  input: string;
+};
+
 type CompileResult = {
   success: boolean;
   output: string;
   error?: string;
   warnings?: string;
+  waitingForInput?: boolean;
+  status?: 'running' | 'waiting-input' | 'completed' | 'failed' | 'stopped' | 'timeout';
 };
 
 type WorkerResponse = {
@@ -34,7 +42,58 @@ type WorkerResponse = {
   output: string;
   error?: string;
   warnings?: string;
+  waitingForInput?: boolean;
+  status?: 'running' | 'waiting-input' | 'completed' | 'failed' | 'stopped' | 'timeout';
 };
+
+type StreamEvent = {
+  type: 'stream';
+  requestId: string;
+  stream: 'stdout' | 'stderr';
+  text: string;
+};
+
+type StatusEvent = {
+  type: 'status';
+  requestId: string;
+  status: 'running' | 'waiting-input' | 'completed' | 'failed' | 'stopped' | 'timeout';
+};
+
+class StdinRequiredError extends Error {
+  constructor(message = 'stdin is waiting for more input') {
+    super(message);
+    this.name = 'StdinRequiredError';
+  }
+}
+
+class InteractiveStdinFile extends File {
+  constructor() {
+    super(new Uint8Array());
+  }
+
+  append(data: Uint8Array): void {
+    const next = new Uint8Array(this.data.length + data.length);
+    next.set(this.data, 0);
+    next.set(data, this.data.length);
+    this.data = next;
+  }
+}
+
+class InteractiveOpenFile extends OpenFile {
+  fd_read(size: number): { ret: number; data: Uint8Array } {
+    const slice = this.file.data.slice(
+      Number(this.file_pos),
+      Number(this.file_pos + BigInt(size))
+    );
+
+    if (slice.length === 0) {
+      throw new StdinRequiredError();
+    }
+
+    this.file_pos += BigInt(slice.length);
+    return { ret: 0, data: slice };
+  }
+}
 
 type CompilerInstance = Awaited<ReturnType<typeof Clang>>;
 type LinkerInstance = Awaited<ReturnType<typeof LLD>>;
@@ -186,415 +245,200 @@ async function compileAndRun(
   let linkerStderr = '';
 
   try {
-    /* ========================================================
-       1. LOAD TOOLCHAIN
-    ========================================================= */
+    const [clang, lld, sysroot] = await Promise.all([
+      getClang((text: string) => {
+        compilerStderr += text + '\n';
+      }),
+      getLld((text: string) => {
+        linkerStderr += text + '\n';
+      }),
+      getSysroot(),
+    ]);
 
-    const [clang, lld, sysroot] =
-      await Promise.all([
-        getClang((text: string) => {
-          compilerStderr += text + '\n';
-        }),
-        getLld((text: string) => {
-          linkerStderr += text + '\n';
-        }),
-        getSysroot(),
-      ]);
+    const invocation = await createInvocation(code);
 
-    /* ========================================================
-       2. CREATE INVOCATION
-    ========================================================= */
+    clang.FS.writeFile('main.c', code);
+    setUpSysroot(clang, sysroot);
 
-    const invocation =
-      await createInvocation(code);
-
-    /* ========================================================
-       3. WRITE SOURCE
-    ========================================================= */
-
-    // Debug: log the source being compiled (escaped) to help diagnose
-    // issues where string escapes are lost or transformed.
-    try {
-      // Use console.error so messages appear in dev console logs
-      console.error(`COMPILER_SOURCE: requestId=${requestId} => ${JSON.stringify(code)}`);
-    } catch (e) {
-      // ignore
-    }
-
-    clang.FS.writeFile(
-      'main.c',
-      code
-    );
-
-    /* ========================================================
-       4. PREPARE CLANG SYSROOT
-    ========================================================= */
-
-    setUpSysroot(
-      clang,
-      sysroot
-    );
-
-    /* ========================================================
-       5. COMPILE C → OBJECT
-    ========================================================= */
-
-    const clangExitCode =
-      clang.callMain(
-        invocation.compilerArgs
-      );
-
+    const clangExitCode = clang.callMain(invocation.compilerArgs);
     if (clangExitCode !== 0) {
       return {
         success: false,
-        output:
-          compilerStderr.trim() ||
-          'Compilation failed.',
-        error:
-          compilerStderr.trim() ||
-          'Compilation failed.',
+        output: compilerStderr.trim() || 'Compilation failed.',
+        error: compilerStderr.trim() || 'Compilation failed.',
+        status: 'failed',
       };
     }
 
-    /* ========================================================
-       6. READ OBJECT
-    ========================================================= */
+    const objectFile = clang.FS.readFile(invocation.compilerArtifact, {
+      encoding: 'binary',
+    });
 
-    const objectFile =
-      clang.FS.readFile(
-        invocation.compilerArtifact,
-        {
-          encoding: 'binary',
-        }
-      );
+    lld.FS.writeFile(invocation.compilerArtifact, objectFile);
+    setUpSysroot(lld, sysroot);
 
-    /* ========================================================
-       7. WRITE OBJECT TO LLD
-    ========================================================= */
-
-    lld.FS.writeFile(
-      invocation.compilerArtifact,
-      objectFile
-    );
-
-    /* ========================================================
-       8. PREPARE LLD SYSROOT
-    ========================================================= */
-
-    setUpSysroot(
-      lld,
-      sysroot
-    );
-
-    /* ========================================================
-       9. LINK OBJECT → WASM
-    ========================================================= */
-
-    const lldExitCode =
-      lld.callMain(
-        invocation.linkerArgs
-      );
-
+    const lldExitCode = lld.callMain(invocation.linkerArgs);
     if (lldExitCode !== 0) {
       return {
         success: false,
-        output:
-          linkerStderr.trim() ||
-          'Linking failed.',
-        error:
-          linkerStderr.trim() ||
-          'Linking failed.',
+        output: linkerStderr.trim() || 'Linking failed.',
+        error: linkerStderr.trim() || 'Linking failed.',
+        status: 'failed',
       };
     }
 
-    /* ========================================================
-       10. READ FINAL WASM
-    ========================================================= */
+    const executable = lld.FS.readFile(invocation.linerArtifact, {
+      encoding: 'binary',
+    });
 
-    const executable =
-      lld.FS.readFile(
-        invocation.linerArtifact,
-        {
-          encoding: 'binary',
-        }
-      );
+    const wasmModule = await WebAssembly.compile(executable);
 
-    /* ========================================================
-       11. COMPILE WASM MODULE
-    ========================================================= */
+    const normalizedStdin = stdinText.length > 0 && !stdinText.endsWith('\n')
+      ? `${stdinText}\n`
+      : stdinText;
 
-    try {
-      console.error(`WASM_EXECUTABLE: requestId=${requestId} size=${executable.length}`);
-      // show first few bytes for debugging
-      console.error(`WASM_HEAD: ${Array.from(executable.slice(0, 16)).join(',')}`);
-    } catch (e) {
-      // ignore
-    }
-
-    const wasmModule =
-      await WebAssembly.compile(
-        executable
-      );
-
-    /* ========================================================
-       12. PREPARE STDIN
-    ========================================================= */
-
-    let normalizedStdin =
-      stdinText;
-
-    if (
-      normalizedStdin.length > 0 &&
-      !normalizedStdin.endsWith('\n')
-    ) {
-      normalizedStdin += '\n';
-    }
-
-    const stdinFile =
-      new File(
-        textEncoder.encode(
-          normalizedStdin
-        )
-      );
-
-    /* ========================================================
-       13. PREPARE STDOUT
-    ========================================================= */
+    const stdinFile = new InteractiveStdinFile();
+    stdinFile.append(textEncoder.encode(normalizedStdin));
 
     const stdoutChunks: string[] = [];
-
-    const stdoutDecoder =
-      new TextDecoder('utf-8', {
-        fatal: false,
-      });
-
-    const stdout =
-      new ConsoleStdout(
-        (buffer) => {
-          const text =
-            stdoutDecoder.decode(
-              buffer,
-              {
-                stream: true,
-              }
-            );
-
-          if (text.length > 0) {
-            stdoutChunks.push(text);
-          }
-        }
-      );
-
-    /* ========================================================
-       14. PREPARE STDERR
-    ========================================================= */
+    const stdoutDecoder = new TextDecoder('utf-8', { fatal: false });
+    const stdout = new ConsoleStdout((buffer) => {
+      const text = stdoutDecoder.decode(buffer, { stream: true });
+      if (text.length > 0) {
+        stdoutChunks.push(text);
+        self.postMessage({
+          type: 'stream',
+          requestId,
+          stream: 'stdout',
+          text,
+        } satisfies StreamEvent);
+      }
+    });
 
     const stderrChunks: string[] = [];
+    const stderrDecoder = new TextDecoder('utf-8', { fatal: false });
+    const stderr = new ConsoleStdout((buffer) => {
+      const text = stderrDecoder.decode(buffer, { stream: true });
+      if (text.length > 0) {
+        stderrChunks.push(text);
+        self.postMessage({
+          type: 'stream',
+          requestId,
+          stream: 'stderr',
+          text,
+        } satisfies StreamEvent);
+      }
+    });
 
-    const stderrDecoder =
-      new TextDecoder('utf-8', {
-        fatal: false,
-      });
+    const wasi = new WASI(['main'], [], [
+      new InteractiveOpenFile(stdinFile),
+      stdout,
+      stderr,
+    ]);
 
-    const stderr =
-      new ConsoleStdout(
-        (buffer) => {
-          const text =
-            stderrDecoder.decode(
-              buffer,
-              {
-                stream: true,
-              }
-            );
-
-          if (text.length > 0) {
-            stderrChunks.push(text);
-          }
-        }
-      );
-
-    /* ========================================================
-       15. CREATE WASI
-    ========================================================= */
-
-    const wasi =
-      new WASI(
-        ['main'],
-        [],
-        [
-          new OpenFile(stdinFile),
-          stdout,
-          stderr,
-        ]
-      );
-
-    /* ========================================================
-       16. INSTANTIATE WASM
-    ========================================================= */
-
-    let instance;
-    try {
-      instance = await WebAssembly.instantiate(wasmModule, {
-        wasi_snapshot_preview1: wasi.wasiImport,
-      });
-
-      try {
-        console.error(`WASM_EXPORTS: requestId=${requestId} -> ${Object.keys((instance as any).exports).join(',')}`);
-      } catch (e) {}
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`WASM_INSTANTIATE_ERROR: requestId=${requestId} -> ${msg}`);
-      throw err;
-    };
-
-
-    /* ========================================================
-       17. RUN PROGRAM
-    ========================================================= */
+    const instance = await WebAssembly.instantiate(wasmModule, {
+      wasi_snapshot_preview1: wasi.wasiImport,
+    });
 
     try {
-      wasi.start(
-        instance as unknown as {
-          exports: {
-            memory: WebAssembly.Memory;
-            _start: () => unknown;
-          };
-        }
-      );
+      self.postMessage({
+        type: 'status',
+        requestId,
+        status: 'running',
+      } satisfies StatusEvent);
+
+      wasi.start(instance as unknown as {
+        exports: {
+          memory: WebAssembly.Memory;
+          _start: () => unknown;
+        };
+      });
     } catch (error) {
-      /*
-       * WASIProcExit is expected when a program calls
-       * exit() or returns from main().
-       */
-      if (!(error instanceof WASIProcExit)) {
-        const remainingStdout =
-          stdoutDecoder.decode();
+      if (error instanceof StdinRequiredError) {
+        self.postMessage({
+          type: 'status',
+          requestId,
+          status: 'waiting-input',
+        } satisfies StatusEvent);
 
-        const remainingStderr =
-          stderrDecoder.decode();
-
-        if (remainingStdout) {
-          stdoutChunks.push(
-            remainingStdout
-          );
-        }
-
-        if (remainingStderr) {
-          stderrChunks.push(
-            remainingStderr
-          );
-        }
-
-        const runtimeOutput =
-          stdoutChunks.join('');
-
-        const runtimeError =
-          stderrChunks.join('').trim();
-
-        const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
-
+        const promptOutput = stdoutChunks.join('');
         return {
           success: false,
-
-          output:
-            runtimeError ||
-            runtimeOutput ||
-            message,
-
-          error:
-            runtimeError ||
-            message,
+          output: promptOutput,
+          error: '',
+          waitingForInput: true,
+          status: 'waiting-input',
         };
       }
 
-      /*
-       * A non-zero WASI exit code is a real program failure.
-       */
-      if (error.code !== 0) {
-        const remainingStdout =
-          stdoutDecoder.decode();
-
-        const remainingStderr =
-          stderrDecoder.decode();
+      if (!(error instanceof WASIProcExit)) {
+        const remainingStdout = stdoutDecoder.decode();
+        const remainingStderr = stderrDecoder.decode();
 
         if (remainingStdout) {
-          stdoutChunks.push(
-            remainingStdout
-          );
+          stdoutChunks.push(remainingStdout);
         }
 
         if (remainingStderr) {
-          stderrChunks.push(
-            remainingStderr
-          );
+          stderrChunks.push(remainingStderr);
         }
 
-        const runtimeError =
-          stderrChunks.join('').trim();
-
-        const output =
-          stdoutChunks.join('');
+        const runtimeOutput = stdoutChunks.join('');
+        const runtimeError = stderrChunks.join('').trim();
+        const message = error instanceof Error ? error.message : String(error);
 
         return {
           success: false,
+          output: runtimeError || runtimeOutput || message,
+          error: runtimeError || message,
+          status: 'failed',
+        };
+      }
 
-          output:
-            runtimeError ||
-            output ||
-            `Program exited with code ${error.code}.`,
+      if (error.code !== 0) {
+        const remainingStdout = stdoutDecoder.decode();
+        const remainingStderr = stderrDecoder.decode();
 
-          error:
-            runtimeError ||
-            `Program exited with code ${error.code}.`,
+        if (remainingStdout) {
+          stdoutChunks.push(remainingStdout);
+        }
+
+        if (remainingStderr) {
+          stderrChunks.push(remainingStderr);
+        }
+
+        const runtimeError = stderrChunks.join('').trim();
+        const output = stdoutChunks.join('');
+
+        return {
+          success: false,
+          output: runtimeError || output || `Program exited with code ${error.code}.`,
+          error: runtimeError || `Program exited with code ${error.code}.`,
+          status: 'failed',
         };
       }
     }
 
-    /* ========================================================
-       18. FLUSH UTF-8 DECODERS
-    ========================================================= */
-
-    const remainingStdout =
-      stdoutDecoder.decode();
-
-    const remainingStderr =
-      stderrDecoder.decode();
+    const remainingStdout = stdoutDecoder.decode();
+    const remainingStderr = stderrDecoder.decode();
 
     if (remainingStdout) {
-      stdoutChunks.push(
-        remainingStdout
-      );
+      stdoutChunks.push(remainingStdout);
     }
 
     if (remainingStderr) {
-      stderrChunks.push(
-        remainingStderr
-      );
+      stderrChunks.push(remainingStderr);
     }
 
-    /* ========================================================
-       19. COLLECT OUTPUT
-    ========================================================= */
+    const output = stdoutChunks.join('');
+    const runtimeError = stderrChunks.join('').trim();
 
-    const output =
-      stdoutChunks.join('');
-
-    const runtimeError =
-      stderrChunks.join('').trim();
-
-    /*
-     * Runtime stderr means the program reported an error,
-     * even if WASI returned normally.
-     */
     if (runtimeError) {
       return {
         success: false,
-        output:
-          output || runtimeError,
+        output: output || runtimeError,
         error: runtimeError,
+        status: 'failed',
       };
     }
 
@@ -604,32 +448,19 @@ async function compileAndRun(
       success: true,
       output,
       warnings: compilerWarnings || undefined,
+      status: 'completed',
     };
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : String(error);
-
-    const compilerError =
-      compilerStderr.trim();
-
-    const linkerError =
-      linkerStderr.trim();
-
-    const errorMessage =
-      compilerError ||
-      linkerError ||
-      message;
+    const message = error instanceof Error ? error.message : String(error);
+    const compilerError = compilerStderr.trim();
+    const linkerError = linkerStderr.trim();
+    const errorMessage = compilerError || linkerError || message;
 
     return {
       success: false,
-
-      output:
-        errorMessage,
-
-      error:
-        errorMessage,
+      output: errorMessage,
+      error: errorMessage,
+      status: 'failed',
     };
   }
 }
@@ -638,34 +469,81 @@ async function compileAndRun(
    WORKER MESSAGE HANDLER
 ============================================================ */
 
+const executionSessions = new Map<string, { code: string; stdin: string }>();
+
+const runSession = async (
+  requestId: string,
+  code: string,
+  stdinText: string
+): Promise<void> => {
+  const result = await compileAndRun(code, stdinText, requestId);
+
+  if (result.waitingForInput) {
+    self.postMessage({
+      type: 'status',
+      requestId,
+      status: 'waiting-input',
+    } satisfies StatusEvent);
+    return;
+  }
+
+  const response: WorkerResponse = {
+    type: 'result',
+    requestId,
+    success: result.success,
+    output: result.output,
+    error: result.error,
+    warnings: result.warnings,
+    waitingForInput: result.waitingForInput,
+    status: result.status,
+  };
+
+  self.postMessage({
+    type: 'status',
+    requestId,
+    status: result.status ?? (result.success ? 'completed' : 'failed'),
+  } satisfies StatusEvent);
+
+  self.postMessage(response);
+
+  if (!result.waitingForInput) {
+    executionSessions.delete(requestId);
+  }
+};
+
 self.addEventListener(
   'message',
   async (
-    event: MessageEvent<CompileRequest>
+    event: MessageEvent<CompileRequest | InputRequest>
   ) => {
-    if (
-      event.data?.type !== 'compile'
-    ) {
+    const data = event.data;
+
+    if (!data) {
+      return;
+    }
+
+    if (data.type === 'stdin') {
+      const session = executionSessions.get(data.requestId);
+      if (!session) {
+        return;
+      }
+
+      session.stdin += data.input;
+      await runSession(data.requestId, session.code, session.stdin);
+      return;
+    }
+
+    if (data.type !== 'compile') {
       return;
     }
 
     try {
-      const result =
-        await compileAndRun(
-          event.data.code,
-          event.data.stdin ?? ''
-        );
+      executionSessions.set(data.requestId, {
+        code: data.code,
+        stdin: data.stdin ?? '',
+      });
 
-      const response: WorkerResponse = {
-        type: 'result',
-        requestId: event.data.requestId,
-        success: result.success,
-        output: result.output,
-        error: result.error,
-        warnings: result.warnings,
-      };
-
-      self.postMessage(response);
+      await runSession(data.requestId, data.code, data.stdin ?? '');
     } catch (error) {
       const message =
         error instanceof Error
@@ -674,14 +552,22 @@ self.addEventListener(
 
       const response: WorkerResponse = {
         type: 'result',
-        requestId: event.data.requestId,
+        requestId: data.requestId,
         success: false,
         output: message,
         error: message,
         warnings: undefined,
+        status: 'failed',
       };
 
+      self.postMessage({
+        type: 'status',
+        requestId: data.requestId,
+        status: 'failed',
+      } satisfies StatusEvent);
+
       self.postMessage(response);
+      executionSessions.delete(data.requestId);
     }
   }
 );

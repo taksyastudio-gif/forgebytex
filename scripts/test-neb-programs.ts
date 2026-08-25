@@ -67,7 +67,9 @@ export async function runNebTests(timeoutMs = 30000) {
       // Reset compiler worker between runs to avoid stale state
       try {
         compilerClient.terminate();
-      } catch (e) {}
+      } catch {
+        // ignore worker cleanup errors
+      }
       // small delay to ensure worker resources are freed
       await new Promise((r) => setTimeout(r, 200));
 
@@ -118,16 +120,14 @@ export async function runNebTests(timeoutMs = 30000) {
 
   // If running in Node, attempt to write to ./reports
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('fs');
     const path = require('path');
     const outDir = path.resolve(process.cwd(), 'reports');
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     fs.writeFileSync(path.join(outDir, 'neb-compile-report.json'), reportJson, 'utf-8');
     return results;
-  } catch (e) {
+  } catch {
     // As a fallback, print to console
-    // eslint-disable-next-line no-console
     console.log(reportJson);
     return results;
   }
@@ -136,16 +136,15 @@ export async function runNebTests(timeoutMs = 30000) {
 // If executed directly with tsx/node, run the tests and exit.
 if (typeof module !== 'undefined' && module && module === (module as any).exports) {
   (async () => {
-    // eslint-disable-next-line no-console
     console.log('Starting NEB compilation tests...');
     try {
       const r = await runNebTests();
-      // eslint-disable-next-line no-console
       console.log('NEB compile report generated with', r.length, 'entries');
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('Error running NEB tests:', err);
-      try { process.exit(1); } catch (e) {}
+      try { process.exit(1); } catch {
+        // ignore process exit errors in browser-like contexts
+      }
     }
   })();
 }
