@@ -210,10 +210,10 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
         </div>
 
         <a
-          href="https://www.instagram.com/dg_onikage"
+          href="https://www.instagram.com/taksyastudio"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Visit @dg_onikage on Instagram"
+          aria-label="Visit @taksyastudio on Instagram"
           className="group flex shrink-0 items-center gap-1.5 text-xs font-semibold text-indigo-400 transition-colors hover:text-indigo-300"
         >
           <InstagramIcon
@@ -222,7 +222,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
           />
 
           <span className="hidden sm:inline">
-            @dg_onikage →
+            @taksyastudio →
           </span>
         </a>
       </div>

@@ -5,11 +5,41 @@ export type CompileRequest = {
   stdin?: string;
 };
 
+export type WorkerInputRequest = {
+  type: 'stdin';
+  requestId: string;
+  input: string;
+};
+
 export type CompileResult = {
   success: boolean;
   output: string;
   error?: string;
   warnings?: string;
+  waitingForInput?: boolean;
+  status?: ExecutionStatus;
+};
+
+export type ExecutionStatus =
+  | 'idle'
+  | 'running'
+  | 'waiting-input'
+  | 'completed'
+  | 'failed'
+  | 'stopped'
+  | 'timeout';
+
+type WorkerStreamEvent = {
+  type: 'stream';
+  requestId: string;
+  stream: 'stdout' | 'stderr';
+  text: string;
+};
+
+type WorkerStatusEvent = {
+  type: 'status';
+  requestId: string;
+  status: ExecutionStatus;
 };
 
 type WorkerResponse = {
@@ -19,17 +49,22 @@ type WorkerResponse = {
   output: string;
   error?: string;
   warnings?: string;
+  waitingForInput?: boolean;
+  status?: ExecutionStatus;
 };
 
 type PendingRequest = {
   resolve: (result: CompileResult) => void;
   reject: (error: Error) => void;
   worker: Worker;
+  onOutput?: (stream: 'stdout' | 'stderr', text: string) => void;
+  onStatus?: (status: ExecutionStatus) => void;
 };
 
 class CompilerClient {
   private pendingRequests = new Map<string, PendingRequest>();
   private pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  private activeRequestId: string | null = null;
   private readonly requestTimeoutMs = 30000;
 
   private createWorker(): Worker {
@@ -70,6 +105,10 @@ class CompilerClient {
       this.pendingTimeouts.delete(requestId);
     }
 
+    if (this.activeRequestId === requestId) {
+      this.activeRequestId = null;
+    }
+
     try {
       pending.worker.terminate();
     } catch {
@@ -78,18 +117,31 @@ class CompilerClient {
   }
 
   private handleMessage = (
-    event: MessageEvent<WorkerResponse>
+    event: MessageEvent<WorkerResponse | WorkerStreamEvent | WorkerStatusEvent>
   ): void => {
     const data = event.data;
 
-    if (!data || data.type !== 'result') {
+    if (!data) {
       return;
     }
 
-    const pending = this.pendingRequests.get(
-      data.requestId
-    );
+    if (data.type === 'stream') {
+      const pending = this.pendingRequests.get(data.requestId);
+      pending?.onOutput?.(data.stream, data.text);
+      return;
+    }
 
+    if (data.type === 'status') {
+      const pending = this.pendingRequests.get(data.requestId);
+      pending?.onStatus?.(data.status);
+      return;
+    }
+
+    if (data.type !== 'result') {
+      return;
+    }
+
+    const pending = this.pendingRequests.get(data.requestId);
     if (!pending) {
       return;
     }
@@ -101,6 +153,8 @@ class CompilerClient {
       output: data.output,
       error: data.error,
       warnings: data.warnings,
+      waitingForInput: data.waitingForInput,
+      status: data.status,
     });
   };
 
@@ -139,11 +193,14 @@ class CompilerClient {
 
     this.pendingTimeouts.clear();
     this.pendingRequests.clear();
+    this.activeRequestId = null;
   }
 
   compile(
     code: string,
-    stdin = ''
+    stdin = '',
+    onOutput?: (stream: 'stdout' | 'stderr', text: string) => void,
+    onStatus?: (status: ExecutionStatus) => void
   ): Promise<CompileResult> {
     const backendUrl =
       typeof import.meta !== 'undefined' &&
@@ -170,6 +227,7 @@ class CompilerClient {
             success: false,
             output: data.output || '',
             error: data.error || 'Backend compilation failed.',
+            status: 'failed',
           };
         }
 
@@ -177,6 +235,7 @@ class CompilerClient {
           success: true,
           output: data.output || '',
           error: data.error || undefined,
+          status: 'completed',
         };
       });
     }
@@ -193,37 +252,88 @@ class CompilerClient {
       stdin,
     };
 
-    return new Promise<CompileResult>(
-      (resolve, reject) => {
-        this.pendingRequests.set(requestId, {
-          resolve,
-          reject,
-          worker,
-        });
+    this.activeRequestId = requestId;
 
-        const timeoutId = setTimeout(() => {
-          if (!this.pendingRequests.has(requestId)) {
-            return;
-          }
+    return new Promise<CompileResult>((resolve, reject) => {
+      this.pendingRequests.set(requestId, {
+        resolve,
+        reject,
+        worker,
+        onOutput,
+        onStatus,
+      });
 
-          const pending = this.pendingRequests.get(requestId);
-          this.pendingRequests.delete(requestId);
-          this.pendingTimeouts.delete(requestId);
+      const timeoutId = setTimeout(() => {
+        if (!this.pendingRequests.has(requestId)) {
+          return;
+        }
 
-          try {
-            pending?.worker.terminate();
-          } catch {
-            // Ignore worker teardown errors.
-          }
+        const pending = this.pendingRequests.get(requestId);
+        this.pendingRequests.delete(requestId);
+        this.pendingTimeouts.delete(requestId);
 
-          reject(new Error('Compiler timed out. Please try again.'));
-        }, this.requestTimeoutMs);
+        if (this.activeRequestId === requestId) {
+          this.activeRequestId = null;
+        }
 
-        this.pendingTimeouts.set(requestId, timeoutId);
+        try {
+          pending?.worker.terminate();
+        } catch {
+          // Ignore worker teardown errors.
+        }
 
-        worker.postMessage(request);
+        pending?.onStatus?.('timeout');
+        reject(new Error('Compiler timed out. Please try again.'));
+      }, this.requestTimeoutMs);
+
+      this.pendingTimeouts.set(requestId, timeoutId);
+
+      worker.postMessage(request);
+    });
+  }
+
+  sendInput(input: string): boolean {
+    if (!this.activeRequestId) {
+      return false;
+    }
+
+    const requestId = this.activeRequestId;
+    const pending = this.pendingRequests.get(requestId);
+    if (!pending) {
+      return false;
+    }
+
+    const message: WorkerInputRequest = {
+      type: 'stdin',
+      requestId,
+      input,
+    };
+
+    pending.worker.postMessage(message);
+    return true;
+  }
+
+  stopCurrent(): void {
+    if (!this.activeRequestId) {
+      return;
+    }
+
+    const requestId = this.activeRequestId;
+    const pending = this.pendingRequests.get(requestId);
+
+    if (pending) {
+      try {
+        pending.worker.terminate();
+      } catch {
+        // Ignore worker teardown errors.
       }
-    );
+
+      this.pendingTimeouts.delete(requestId);
+      this.pendingRequests.delete(requestId);
+      pending.onStatus?.('stopped');
+    }
+
+    this.activeRequestId = null;
   }
 
   terminate(): void {
@@ -242,6 +352,7 @@ class CompilerClient {
     }
 
     this.pendingRequests.clear();
+    this.activeRequestId = null;
   }
 }
 
