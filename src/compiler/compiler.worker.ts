@@ -13,51 +13,13 @@ import {
   WASIProcExit,
 } from '@bjorn3/browser_wasi_shim';
 
-type CompileRequest = {
-  type: 'compile';
-  requestId: string;
-  code: string;
-  stdin?: string;
-};
-
-type InputRequest = {
-  type: 'stdin';
-  requestId: string;
-  input: string;
-};
-
-type CompileResult = {
-  success: boolean;
-  output: string;
-  error?: string;
-  warnings?: string;
-  waitingForInput?: boolean;
-  status?: 'running' | 'waiting-input' | 'completed' | 'failed' | 'stopped' | 'timeout';
-};
-
-type WorkerResponse = {
-  type: 'result';
-  requestId: string;
-  success: boolean;
-  output: string;
-  error?: string;
-  warnings?: string;
-  waitingForInput?: boolean;
-  status?: 'running' | 'waiting-input' | 'completed' | 'failed' | 'stopped' | 'timeout';
-};
-
-type StreamEvent = {
-  type: 'stream';
-  requestId: string;
-  stream: 'stdout' | 'stderr';
-  text: string;
-};
-
-type StatusEvent = {
-  type: 'status';
-  requestId: string;
-  status: 'running' | 'waiting-input' | 'completed' | 'failed' | 'stopped' | 'timeout';
-};
+import type {
+  ExecutionPhase,
+  ExecutionStatus,
+  OutputStream,
+  RuntimeEvent,
+  RuntimeRequest,
+} from './execution-protocol';
 
 class StdinRequiredError extends Error {
   constructor(message = 'stdin is waiting for more input') {
@@ -196,7 +158,7 @@ const createInvocation = async (
    * browsercc may provide C++ defaults depending on the
    * invocation configuration.
    *
-   * BytePlay currently treats this compiler as a C compiler,
+   * forgebyteX currently treats this compiler as a C compiler,
    * so remove C++ standard flags before forcing C17.
    */
   const cxxStandardFlags = new Set([
@@ -239,10 +201,41 @@ const createInvocation = async (
 async function compileAndRun(
   code: string,
   stdinText: string,
-  requestId = 'unknown'
-): Promise<CompileResult> {
+  requestId: string,
+  attempt: number
+): Promise<{
+  success: boolean;
+  output: string;
+  error?: string;
+  warnings?: string;
+  exitCode?: number | null;
+  waitingForInput?: boolean;
+  status: ExecutionStatus;
+  phase: ExecutionPhase;
+}> {
   let compilerStderr = '';
   let linkerStderr = '';
+
+  const post = (event: RuntimeEvent): void => {
+    self.postMessage(event);
+  };
+
+  const emit = (
+    stream: OutputStream,
+    text: string
+  ): void => {
+    if (!text) {
+      return;
+    }
+
+    post({
+      type: 'stream',
+      requestId,
+      stream,
+      text,
+      attempt,
+    });
+  };
 
   try {
     const [clang, lld, sysroot] = await Promise.all([
@@ -266,7 +259,9 @@ async function compileAndRun(
         success: false,
         output: compilerStderr.trim() || 'Compilation failed.',
         error: compilerStderr.trim() || 'Compilation failed.',
+        exitCode: clangExitCode,
         status: 'failed',
+        phase: 'compile',
       };
     }
 
@@ -283,7 +278,9 @@ async function compileAndRun(
         success: false,
         output: linkerStderr.trim() || 'Linking failed.',
         error: linkerStderr.trim() || 'Linking failed.',
+        exitCode: lldExitCode,
         status: 'failed',
+        phase: 'link',
       };
     }
 
@@ -306,12 +303,7 @@ async function compileAndRun(
       const text = stdoutDecoder.decode(buffer, { stream: true });
       if (text.length > 0) {
         stdoutChunks.push(text);
-        self.postMessage({
-          type: 'stream',
-          requestId,
-          stream: 'stdout',
-          text,
-        } satisfies StreamEvent);
+        emit('stdout', text);
       }
     });
 
@@ -321,12 +313,7 @@ async function compileAndRun(
       const text = stderrDecoder.decode(buffer, { stream: true });
       if (text.length > 0) {
         stderrChunks.push(text);
-        self.postMessage({
-          type: 'stream',
-          requestId,
-          stream: 'stderr',
-          text,
-        } satisfies StreamEvent);
+        emit('stderr', text);
       }
     });
 
@@ -340,12 +327,15 @@ async function compileAndRun(
       wasi_snapshot_preview1: wasi.wasiImport,
     });
 
+    let exitCode = 0;
+
     try {
-      self.postMessage({
+      post({
         type: 'status',
         requestId,
         status: 'running',
-      } satisfies StatusEvent);
+        attempt,
+      });
 
       wasi.start(instance as unknown as {
         exports: {
@@ -355,19 +345,19 @@ async function compileAndRun(
       });
     } catch (error) {
       if (error instanceof StdinRequiredError) {
-        self.postMessage({
-          type: 'status',
-          requestId,
-          status: 'waiting-input',
-        } satisfies StatusEvent);
-
-        const promptOutput = stdoutChunks.join('');
+        /*
+         * Program exhausted stdin. Report the suspension as a result
+         * carrying waitingForInput so the client keeps the worker (and
+         * its loaded toolchain) alive for the resumed attempt.
+         */
         return {
           success: false,
-          output: promptOutput,
+          output: stdoutChunks.join(''),
           error: '',
+          exitCode: null,
           waitingForInput: true,
           status: 'waiting-input',
+          phase: 'run',
         };
       }
 
@@ -377,10 +367,12 @@ async function compileAndRun(
 
         if (remainingStdout) {
           stdoutChunks.push(remainingStdout);
+          emit('stdout', remainingStdout);
         }
 
         if (remainingStderr) {
           stderrChunks.push(remainingStderr);
+          emit('stderr', remainingStderr);
         }
 
         const runtimeOutput = stdoutChunks.join('');
@@ -391,7 +383,9 @@ async function compileAndRun(
           success: false,
           output: runtimeError || runtimeOutput || message,
           error: runtimeError || message,
+          exitCode: null,
           status: 'failed',
+          phase: 'run',
         };
       }
 
@@ -401,10 +395,12 @@ async function compileAndRun(
 
         if (remainingStdout) {
           stdoutChunks.push(remainingStdout);
+          emit('stdout', remainingStdout);
         }
 
         if (remainingStderr) {
           stderrChunks.push(remainingStderr);
+          emit('stderr', remainingStderr);
         }
 
         const runtimeError = stderrChunks.join('').trim();
@@ -414,9 +410,13 @@ async function compileAndRun(
           success: false,
           output: runtimeError || output || `Program exited with code ${error.code}.`,
           error: runtimeError || `Program exited with code ${error.code}.`,
+          exitCode: error.code,
           status: 'failed',
+          phase: 'run',
         };
       }
+
+      exitCode = error.code;
     }
 
     const remainingStdout = stdoutDecoder.decode();
@@ -424,10 +424,12 @@ async function compileAndRun(
 
     if (remainingStdout) {
       stdoutChunks.push(remainingStdout);
+      emit('stdout', remainingStdout);
     }
 
     if (remainingStderr) {
       stderrChunks.push(remainingStderr);
+      emit('stderr', remainingStderr);
     }
 
     const output = stdoutChunks.join('');
@@ -438,7 +440,9 @@ async function compileAndRun(
         success: false,
         output: output || runtimeError,
         error: runtimeError,
+        exitCode,
         status: 'failed',
+        phase: 'run',
       };
     }
 
@@ -448,7 +452,9 @@ async function compileAndRun(
       success: true,
       output,
       warnings: compilerWarnings || undefined,
+      exitCode,
       status: 'completed',
+      phase: 'run',
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -460,61 +466,119 @@ async function compileAndRun(
       success: false,
       output: errorMessage,
       error: errorMessage,
+      exitCode: null,
       status: 'failed',
+      phase: 'compile',
     };
   }
 }
 
 /* ============================================================
    WORKER MESSAGE HANDLER
-============================================================ */
+   ============================================================ */
 
-const executionSessions = new Map<string, { code: string; stdin: string }>();
+type Session = {
+  code: string;
+  stdin: string;
+  attempt: number;
+};
 
-const runSession = async (
+const executionSessions = new Map<string, Session>();
+
+/*
+ * All executions for this worker are funneled through a serial queue.
+ * A resumed (interactive stdin) run must never interleave with another
+ * pending resume for the same or a different session: WASM execution
+ * is synchronous once started, but the async setup steps would
+ * otherwise allow two runSessions to overlap at await points.
+ */
+let executionChain: Promise<void> = Promise.resolve();
+
+const enqueueExecution = (task: () => Promise<void>): void => {
+  executionChain = executionChain.then(task, task);
+};
+
+const finishRun = (
   requestId: string,
-  code: string,
-  stdinText: string
-): Promise<void> => {
-  const result = await compileAndRun(code, stdinText, requestId);
-
+  attempt: number,
+  result: Awaited<ReturnType<typeof compileAndRun>>
+): void => {
   if (result.waitingForInput) {
+    /*
+     * Single message tells the client everything: stay alive, pause
+     * the watchdog, surface 'waiting-input'.
+     */
     self.postMessage({
-      type: 'status',
+      type: 'result',
       requestId,
+      success: false,
+      output: result.output,
+      error: result.error,
+      warnings: result.warnings,
+      exitCode: result.exitCode ?? null,
+      waitingForInput: true,
       status: 'waiting-input',
-    } satisfies StatusEvent);
+      phase: result.phase,
+    } satisfies RuntimeEvent);
     return;
   }
 
-  const response: WorkerResponse = {
+  self.postMessage({
+    type: 'status',
+    requestId,
+    status: result.status,
+    attempt,
+  } satisfies RuntimeEvent);
+
+  self.postMessage({
     type: 'result',
     requestId,
     success: result.success,
     output: result.output,
     error: result.error,
     warnings: result.warnings,
-    waitingForInput: result.waitingForInput,
+    exitCode: result.exitCode ?? null,
+    waitingForInput: false,
     status: result.status,
-  };
+    phase: result.phase,
+  } satisfies RuntimeEvent);
 
-  self.postMessage({
-    type: 'status',
-    requestId,
-    status: result.status ?? (result.success ? 'completed' : 'failed'),
-  } satisfies StatusEvent);
+  executionSessions.delete(requestId);
+};
 
-  self.postMessage(response);
+const runSession = async (
+  requestId: string,
+  session: Session
+): Promise<void> => {
+  const attempt = session.attempt;
 
-  if (!result.waitingForInput) {
-    executionSessions.delete(requestId);
+  if (attempt === 1) {
+    self.postMessage({
+      type: 'status',
+      requestId,
+      status: 'compiling',
+      attempt,
+    } satisfies RuntimeEvent);
   }
+
+  const result = await compileAndRun(
+    session.code,
+    session.stdin,
+    requestId,
+    attempt
+  );
+
+  if (result.waitingForInput) {
+    session.attempt += 1;
+  }
+
+  finishRun(requestId, attempt, result);
 };
 
 self.addEventListener(
   'message',
-  async (
-    event: MessageEvent<CompileRequest | InputRequest>
+  (
+    event: MessageEvent<RuntimeRequest>
   ) => {
     const data = event.data;
 
@@ -525,11 +589,43 @@ self.addEventListener(
     if (data.type === 'stdin') {
       const session = executionSessions.get(data.requestId);
       if (!session) {
+        // Unknown/expired session: stale message, drop it.
         return;
       }
 
       session.stdin += data.input;
-      await runSession(data.requestId, session.code, session.stdin);
+
+      enqueueExecution(async () => {
+        try {
+          await runSession(data.requestId, session);
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : String(error);
+
+          self.postMessage({
+            type: 'status',
+            requestId: data.requestId,
+            status: 'failed',
+            attempt: session.attempt,
+          } satisfies RuntimeEvent);
+
+          self.postMessage({
+            type: 'result',
+            requestId: data.requestId,
+            success: false,
+            output: message,
+            error: message,
+            exitCode: null,
+            waitingForInput: false,
+            status: 'failed',
+            phase: 'run',
+          } satisfies RuntimeEvent);
+
+          executionSessions.delete(data.requestId);
+        }
+      });
       return;
     }
 
@@ -537,37 +633,44 @@ self.addEventListener(
       return;
     }
 
-    try {
-      executionSessions.set(data.requestId, {
-        code: data.code,
-        stdin: data.stdin ?? '',
-      });
+    const session: Session = {
+      code: data.code,
+      stdin: data.stdin ?? '',
+      attempt: 1,
+    };
 
-      await runSession(data.requestId, data.code, data.stdin ?? '');
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : String(error);
+    executionSessions.set(data.requestId, session);
 
-      const response: WorkerResponse = {
-        type: 'result',
-        requestId: data.requestId,
-        success: false,
-        output: message,
-        error: message,
-        warnings: undefined,
-        status: 'failed',
-      };
+    enqueueExecution(async () => {
+      try {
+        await runSession(data.requestId, session);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error);
 
-      self.postMessage({
-        type: 'status',
-        requestId: data.requestId,
-        status: 'failed',
-      } satisfies StatusEvent);
+        self.postMessage({
+          type: 'status',
+          requestId: data.requestId,
+          status: 'failed',
+          attempt: 1,
+        } satisfies RuntimeEvent);
 
-      self.postMessage(response);
-      executionSessions.delete(data.requestId);
-    }
+        self.postMessage({
+          type: 'result',
+          requestId: data.requestId,
+          success: false,
+          output: message,
+          error: message,
+          exitCode: null,
+          waitingForInput: false,
+          status: 'failed',
+          phase: 'compile',
+        } satisfies RuntimeEvent);
+
+        executionSessions.delete(data.requestId);
+      }
+    });
   }
 );

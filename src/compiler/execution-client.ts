@@ -1,0 +1,377 @@
+import type {
+  ExecutionResult,
+  RunHooks,
+  RuntimeEvent,
+  RuntimeRequest,
+} from './execution-protocol';
+
+/**
+ * Watchdog window measured in INACTIVITY. Streaming output or status
+ * transitions keep resetting it, so long-running programs that produce
+ * output are never killed, while a wedged worker is reaped promptly.
+ * While a program is suspended waiting for user input the watchdog is
+ * disarmed completely.
+ */
+const IDLE_TIMEOUT_MS = 30000;
+
+type PendingRequest = {
+  resolve: (result: ExecutionResult) => void;
+  reject: (error: Error) => void;
+  worker: Worker;
+  hooks: RunHooks;
+};
+
+/**
+ * Generic single-flight worker execution client.
+ *
+ * Owns the full worker lifecycle for one language runtime: creation,
+ * message routing, stale-event filtering, activity watchdog, stdin
+ * forwarding, stop and teardown. Concrete clients (C, Python) are thin
+ * wrappers around this class.
+ */
+export class ExecutionClient {
+  private readonly workerUrl: URL;
+  private readonly workerOptions: WorkerOptions;
+
+  private pendingRequests = new Map<string, PendingRequest>();
+  private watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  private activeRequestId: string | null = null;
+
+  constructor(
+    workerModule: () => URL,
+    workerOptions: WorkerOptions = { type: 'module' }
+  ) {
+    this.workerUrl = workerModule();
+    this.workerOptions = workerOptions;
+  }
+
+  /* ============================================================
+     WORKER FACTORY
+     ============================================================ */
+
+  private createWorker(): Worker {
+    const worker = new Worker(this.workerUrl, this.workerOptions);
+
+    worker.addEventListener('message', this.handleMessage);
+    worker.addEventListener('error', this.handleWorkerError);
+    worker.addEventListener('messageerror', this.handleMessageError);
+
+    return worker;
+  }
+
+  /* ============================================================
+     WATCHDOG
+     ============================================================ */
+
+  private armWatchdog(requestId: string): void {
+    this.disarmWatchdog(requestId);
+
+    const timeoutId = setTimeout(() => {
+      this.expireRequest(requestId);
+    }, IDLE_TIMEOUT_MS);
+
+    this.watchdogs.set(requestId, timeoutId);
+  }
+
+  private disarmWatchdog(requestId: string): void {
+    const timeoutId = this.watchdogs.get(requestId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      this.watchdogs.delete(requestId);
+    }
+  }
+
+  private expireRequest(requestId: string): void {
+    const pending = this.pendingRequests.get(requestId);
+    if (!pending) {
+      return;
+    }
+
+    this.teardownRequest(requestId);
+
+    pending.hooks.onStatus?.('timeout');
+    pending.reject(
+      new Error(
+        'Execution timed out after 30 seconds without activity.'
+      )
+    );
+  }
+
+  /**
+   * Removes all bookkeeping for a request and terminates its worker.
+   * Only call once the request will never receive further messages.
+   */
+  private teardownRequest(requestId: string): void {
+    const pending = this.pendingRequests.get(requestId);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingRequests.delete(requestId);
+    this.disarmWatchdog(requestId);
+
+    if (this.activeRequestId === requestId) {
+      this.activeRequestId = null;
+    }
+
+    try {
+      pending.worker.terminate();
+    } catch {
+      // Ignore worker teardown errors.
+    }
+  }
+
+  /* ============================================================
+     WORKER MESSAGE ROUTING
+     ============================================================ */
+
+  private handleMessage = (
+    event: MessageEvent<RuntimeEvent>
+  ): void => {
+    const data = event.data;
+
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+
+    if (data.type === 'stream') {
+      const pending = this.pendingRequests.get(data.requestId);
+
+      /*
+       * Streams for unknown/expired requestIds are stale worker
+       * messages (e.g. from a timed-out run) and are dropped so they
+       * can never leak into the current run's output.
+       */
+      if (!pending) {
+        return;
+      }
+
+      // Program produced output: it is alive, reward it with time.
+      this.armWatchdog(data.requestId);
+      pending.hooks.onOutput?.(
+        data.stream,
+        data.text,
+        data.attempt ?? 1
+      );
+      return;
+    }
+
+    if (data.type === 'status') {
+      const pending = this.pendingRequests.get(data.requestId);
+      if (!pending) {
+        return;
+      }
+
+      if (data.status === 'waiting-input') {
+        // Suspended on the user: pause the watchdog entirely.
+        this.disarmWatchdog(data.requestId);
+      } else {
+        this.armWatchdog(data.requestId);
+      }
+
+      pending.hooks.onStatus?.(data.status);
+      return;
+    }
+
+    if (data.type !== 'result') {
+      return;
+    }
+
+    const pending = this.pendingRequests.get(data.requestId);
+    if (!pending) {
+      // Duplicate or late result for an already-settled request.
+      return;
+    }
+
+    if (data.waitingForInput) {
+      /*
+       * The program suspended waiting for stdin. The worker (and its
+       * loaded toolchain/runtime + session) must stay alive so input
+       * can be forwarded; the promise intentionally remains pending
+       * until the program finishes or the user stops it.
+       */
+      this.disarmWatchdog(data.requestId);
+      pending.hooks.onStatus?.('waiting-input');
+      return;
+    }
+
+    this.teardownRequest(data.requestId);
+
+    pending.resolve({
+      success: data.success,
+      output: data.output,
+      error: data.error,
+      warnings: data.warnings,
+      exitCode: data.exitCode ?? null,
+      waitingForInput: false,
+      status: data.status ?? (data.success ? 'completed' : 'failed'),
+      phase: data.phase,
+    });
+  };
+
+  private handleWorkerError = (event: ErrorEvent): void => {
+    const error = new Error(
+      event.message || 'The runtime worker stopped unexpectedly.'
+    );
+
+    this.rejectAllPending(error);
+  };
+
+  private handleMessageError = (): void => {
+    const error = new Error(
+      'Unable to communicate with the runtime worker.'
+    );
+
+    this.rejectAllPending(error);
+  };
+
+  private rejectAllPending(error: Error): void {
+    for (const [requestId, pending] of this.pendingRequests) {
+      this.disarmWatchdog(requestId);
+
+      try {
+        pending.worker.terminate();
+      } catch {
+        // Ignore worker teardown errors.
+      }
+
+      pending.reject(error);
+    }
+
+    this.pendingRequests.clear();
+    this.watchdogs.clear();
+    this.activeRequestId = null;
+  }
+
+  /* ============================================================
+     PUBLIC API
+     ============================================================ */
+
+  /** Start a run. Resolves with the final ExecutionResult. */
+  run(
+    code: string,
+    stdin = '',
+    hooks: RunHooks = {}
+  ): Promise<ExecutionResult> {
+    /*
+     * Busy guard: a second concurrent run would race on the runtime's
+     * filesystem/state inside the worker and interleave two result
+     * streams. The UI normally prevents this; defensive backstop.
+     */
+    if (this.activeRequestId) {
+      return Promise.reject(
+        new Error('An execution is already in progress.')
+      );
+    }
+
+    const worker = this.createWorker();
+
+    const requestId = `${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+
+    const request: RuntimeRequest = {
+      type: 'compile',
+      requestId,
+      code,
+      stdin,
+    };
+
+    this.activeRequestId = requestId;
+
+    return new Promise<ExecutionResult>((resolve, reject) => {
+      this.pendingRequests.set(requestId, {
+        resolve,
+        reject,
+        worker,
+        hooks,
+      });
+
+      this.armWatchdog(requestId);
+
+      worker.postMessage(request);
+    });
+  }
+
+  /** Backwards-compatible alias used by the C pipeline. */
+  compile(
+    code: string,
+    stdin = '',
+    hooks: RunHooks = {}
+  ): Promise<ExecutionResult> {
+    return this.run(code, stdin, hooks);
+  }
+
+  /** Forward a line of stdin to the active (possibly suspended) run. */
+  sendInput(input: string): boolean {
+    if (!this.activeRequestId) {
+      return false;
+    }
+
+    const requestId = this.activeRequestId;
+    const pending = this.pendingRequests.get(requestId);
+    if (!pending) {
+      return false;
+    }
+
+    const message: RuntimeRequest = {
+      type: 'stdin',
+      requestId,
+      input,
+    };
+
+    // Resuming activity: give the run a fresh watchdog window.
+    this.armWatchdog(requestId);
+
+    pending.worker.postMessage(message);
+    return true;
+  }
+
+  /** Abort the active run. Pending promises settle as 'stopped'. */
+  stopCurrent(): void {
+    if (!this.activeRequestId) {
+      return;
+    }
+
+    const requestId = this.activeRequestId;
+    const pending = this.pendingRequests.get(requestId);
+
+    if (pending) {
+      this.teardownRequest(requestId);
+
+      pending.hooks.onStatus?.('stopped');
+      pending.resolve({
+        success: false,
+        output: '',
+        error: 'Execution stopped.',
+        exitCode: null,
+        status: 'stopped',
+      });
+    }
+
+    this.activeRequestId = null;
+  }
+
+  /** Whether a run is currently in flight on this client. */
+  get busy(): boolean {
+    return this.activeRequestId !== null;
+  }
+
+  /** Tear everything down (page unload / hard reset). */
+  terminate(): void {
+    for (const requestId of this.pendingRequests.keys()) {
+      this.disarmWatchdog(requestId);
+      const pending = this.pendingRequests.get(requestId);
+
+      try {
+        pending?.worker.terminate();
+      } catch {
+        // Ignore worker teardown errors.
+      }
+    }
+
+    this.pendingRequests.clear();
+    this.watchdogs.clear();
+    this.activeRequestId = null;
+  }
+}

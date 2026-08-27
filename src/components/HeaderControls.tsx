@@ -3,6 +3,8 @@ import {
   ChevronDown,
   Download,
   FilePlus2,
+  Maximize2,
+  Minimize2,
   Play,
   RotateCcw,
   Trash2,
@@ -29,6 +31,8 @@ interface HeaderControlsProps {
 
   onLanguageSelect: (lang: SupportedLanguage) => void;
   onThemeSelect: (theme: EditorTheme) => void;
+  isFocusMode: boolean;
+  onToggleFocusMode: () => void;
 }
 
 type LanguageOption = {
@@ -55,7 +59,7 @@ const LANGUAGES: LanguageOption[] = [
     id: 'python',
     label: 'Python 3',
     shortLabel: 'PY',
-    status: 'SOON',
+    status: 'LIVE',
   },
   {
     id: 'sql',
@@ -76,20 +80,16 @@ const THEMES: Array<{
   label: string;
 }> = [
   {
-    id: 'vs-dark',
-    label: 'VS Dark',
+    id: 'black',
+    label: 'Black',
   },
   {
-    id: 'one-dark',
-    label: 'One Dark',
+    id: 'white',
+    label: 'White',
   },
   {
-    id: 'monokai',
-    label: 'Monokai',
-  },
-  {
-    id: 'github-dark',
-    label: 'GitHub Dark',
+    id: 'cyberpunk',
+    label: 'Cyberpunk',
   },
 ];
 
@@ -123,6 +123,8 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
   onExport,
   onLanguageSelect,
   onThemeSelect,
+  isFocusMode,
+  onToggleFocusMode,
 }) => {
   const [isLangDropdownOpen, setIsLangDropdownOpen] =
     useState(false);
@@ -187,12 +189,18 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
     ) ?? LANGUAGES[0];
 
   return (
-    <header className="z-30 flex w-full shrink-0 select-none flex-col border-b border-slate-800/80 bg-[#0b0e17] text-slate-200">
+    <header
+      className={[
+        'app-header z-30 flex w-full shrink-0 select-none flex-col border-b',
+        isFocusMode ? 'is-compact' : '',
+      ].join(' ')}
+    >
       {/* =========================================================
           DEV UPDATE BANNER
       ========================================================== */}
 
-      <div className="flex min-h-[32px] w-full items-center justify-between gap-3 border-b border-slate-800/80 bg-gradient-to-r from-indigo-950/80 via-slate-900 to-purple-950/80 px-3 py-1.5 sm:px-4">
+      {!isFocusMode && (
+      <div className="dev-banner flex min-h-[32px] w-full items-center justify-between gap-3 border-b px-3 py-1.5 sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
           <span className="relative flex h-2 w-2 shrink-0">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
@@ -226,17 +234,18 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
           </span>
         </a>
       </div>
+      )}
 
       {/* =========================================================
           MAIN HEADER
       ========================================================== */}
 
-      <div className="flex min-h-[64px] w-full items-center gap-3 px-3 py-2 sm:h-16 sm:px-4">
+      <div className="main-header-row flex w-full items-center gap-3 px-3 py-2 sm:px-4">
         {/* -------------------------------------------------------
             BYTEPLAY BRAND
         -------------------------------------------------------- */}
 
-        <div className="flex shrink-0 items-center gap-2.5">
+        <div className="brand-block flex shrink-0 items-center gap-2.5">
           <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 p-[1.5px] shadow-lg shadow-indigo-500/20 sm:h-10 sm:w-10">
             <div className="flex h-full w-full items-center justify-center rounded-[10.5px] bg-[#0b0e17]">
               <svg
@@ -277,8 +286,9 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             TAKSYA PROMO / WORDMARK
         ======================================================== */}
 
+        {!isFocusMode && (
         <div className="hidden min-w-0 flex-1 md:flex">
-          <div className="group relative flex h-11 min-w-0 w-full max-w-2xl items-center overflow-hidden rounded-xl border border-cyan-500/30 bg-gradient-to-r from-cyan-950/60 via-slate-900 to-indigo-950/60 px-3 shadow-lg shadow-cyan-950/20 transition-colors duration-300 hover:border-cyan-400/70">
+          <div className="promo-strip group relative flex h-11 min-w-0 w-full max-w-2xl items-center overflow-hidden rounded-xl border px-3 shadow-lg transition-colors duration-300">
             {/* Ambient glow */}
 
             <div className="pointer-events-none absolute -left-12 top-1/2 h-32 w-32 -translate-y-1/2 rounded-full bg-cyan-400/5 blur-3xl transition-all duration-500 group-hover:bg-cyan-400/10" />
@@ -577,6 +587,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             </div>
           </div>
         </div>
+        )}
 
         {/* =======================================================
             RIGHT CONTROLS
@@ -593,8 +604,8 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
                   event.target.value as EditorTheme
                 )
               }
-              aria-label="Editor theme"
-              className="appearance-none cursor-pointer rounded-xl border border-slate-700/80 bg-slate-900/90 px-2.5 py-1.5 pr-8 text-xs font-medium text-slate-200 outline-none transition-all hover:border-indigo-500/60 hover:bg-slate-800 focus:border-indigo-500/60 focus:ring-2 focus:ring-indigo-500/20"
+              aria-label="Application theme"
+              className="select-control appearance-none cursor-pointer rounded-xl border px-2.5 py-1.5 pr-8 text-xs font-medium outline-none transition-all"
             >
               {THEMES.map((theme) => (
                 <option
@@ -607,6 +618,20 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             </select>
             <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" size={14} />
           </div>
+
+          <button
+            type="button"
+            onClick={onToggleFocusMode}
+            className="icon-action h-8 w-8 rounded-xl"
+            aria-label={isFocusMode ? 'Expand header' : 'Focus coding workspace'}
+            title={isFocusMode ? 'Expand header' : 'Focus coding workspace'}
+          >
+            {isFocusMode ? (
+              <Maximize2 size={14} />
+            ) : (
+              <Minimize2 size={14} />
+            )}
+          </button>
 
           {/* Language */}
 
@@ -646,7 +671,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             {isLangDropdownOpen && (
               <div
                 role="menu"
-                className="absolute right-0 top-full z-[100] mt-2 w-52 overflow-hidden rounded-2xl border border-slate-800 bg-[#0d121f]/95 py-1.5 shadow-2xl shadow-black/40 backdrop-blur-xl"
+                className="dropdown-menu absolute right-0 top-full z-[100] mt-2 w-52 overflow-hidden rounded-2xl border py-1.5 shadow-2xl backdrop-blur-xl"
               >
                 {LANGUAGES.map((language) => {
                   const isActive =
@@ -706,7 +731,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
           ACTION BAR
       ========================================================== */}
 
-      <div className="flex w-full items-center justify-between gap-3 overflow-x-auto border-t border-slate-800/60 bg-[#080a10] px-3 py-2 sm:px-4">
+      <div className="action-bar flex w-full items-center justify-between gap-3 overflow-x-auto border-t px-3 py-2 sm:px-4">
         {/* Left Actions */}
 
         <div className="flex shrink-0 items-center gap-2">

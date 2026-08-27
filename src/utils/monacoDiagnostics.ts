@@ -10,13 +10,13 @@ export function applyMonacoMarkers(
   if (!model) return;
 
   const markers: monaco.editor.IMarkerData[] = errors.map((err) => ({
-    startLineNumber: err.line,
-    startColumn: Math.max(1, err.column),
-    endLineNumber: err.line,
-    endColumn: Math.max(err.column + 1, err.column + 5),
-    message: `${err.message}
-
-?? ${err.explanation}`,
+    startLineNumber: err.line ?? 1,
+    startColumn: Math.max(1, err.column ?? 1),
+    endLineNumber: err.line ?? 1,
+    endColumn: Math.max((err.column ?? 1) + 1, (err.column ?? 1) + 5),
+    message: err.explanation
+      ? `${err.message}\n\n${err.explanation}`
+      : err.message,
     severity:
       err.severity === 'warning'
         ? monacoInstance.MarkerSeverity.Warning

@@ -7,26 +7,32 @@ interface InteractiveTerminalProps {
   terminalLogs: string[];
   isWaitingForInput?: boolean;
   onInput: (value: string) => void;
+  /** Increment this to hard-clear the terminal (e.g. when user clicks Clear). */
+  clearGeneration?: number;
 }
 
 export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   terminalLogs,
   isWaitingForInput = false,
   onInput,
+  clearGeneration = 0,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const inputBufferRef = useRef('');
   const onInputRef = useRef(onInput);
+  /** How many log entries the terminal has already written. */
+  const prevLengthRef = useRef(0);
+  /** The clearGeneration that was last acted upon. */
+  const prevClearGenerationRef = useRef(clearGeneration);
 
   useEffect(() => {
     onInputRef.current = onInput;
   }, [onInput]);
 
+  // ── Mount the xterm Terminal once ────────────────────────────────────────
   useEffect(() => {
-    if (!containerRef.current) {
-      return;
-    }
+    if (!containerRef.current) return;
 
     const terminal = new Terminal({
       cursorBlink: true,
@@ -56,35 +62,31 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
 
     terminalRef.current = terminal;
 
-    const scheduleOpen = () => {
-      if (!containerRef.current) {
-        return;
-      }
-
+    // Open inside requestAnimationFrame so the container has layout
+    const openFrame = requestAnimationFrame(() => {
+      if (!containerRef.current || terminalRef.current !== terminal) return;
       terminal.open(containerRef.current);
       terminal.focus();
-    };
+    });
 
-    requestAnimationFrame(scheduleOpen);
-
+    // Handle keyboard input
     terminal.onData((data) => {
+      // Backspace
       if (data === '\u007f' || data === '\b') {
         if (inputBufferRef.current.length > 0) {
           inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+          terminal.write('\b \b');
         }
-
-        terminal.write('\b \b');
         return;
       }
 
+      // Enter
       if (data === '\r' || data === '\n') {
         const rawInput = inputBufferRef.current;
         inputBufferRef.current = '';
-
         if (rawInput) {
           onInputRef.current(rawInput);
         }
-
         terminal.write('\r\n');
         return;
       }
@@ -94,31 +96,48 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
     });
 
     return () => {
+      cancelAnimationFrame(openFrame);
       terminal.dispose();
       terminalRef.current = null;
+      prevLengthRef.current = 0;
+      prevClearGenerationRef.current = 0;
     };
   }, []);
 
+  // ── Hard clear when clearGeneration changes ───────────────────────────────
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal) {
-      return;
+    if (!terminal) return;
+
+    if (clearGeneration !== prevClearGenerationRef.current) {
+      prevClearGenerationRef.current = clearGeneration;
+      prevLengthRef.current = 0;
+      terminal.clear();
+      terminal.reset();
+    }
+  }, [clearGeneration]);
+
+  // ── Append-only: write only the NEW log entries ──────────────────────────
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+
+    const newEntries = terminalLogs.slice(prevLengthRef.current);
+    if (newEntries.length === 0) return;
+
+    for (const entry of newEntries) {
+      // Each entry ends with a newline so lines stay separate.
+      // Entries that already contain \n (multi-line output) are written as-is.
+      terminal.write(entry.endsWith('\n') ? entry : entry + '\r\n');
     }
 
-    terminal.clear();
-
-    if (terminalLogs.length > 0) {
-      const content = terminalLogs.join('\n');
-      terminal.write(content);
-    }
+    prevLengthRef.current = terminalLogs.length;
   }, [terminalLogs]);
 
+  // ── Cursor blink reflects waiting-for-input state ────────────────────────
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal) {
-      return;
-    }
-
+    if (!terminal) return;
     terminal.options.cursorBlink = isWaitingForInput;
   }, [isWaitingForInput]);
 

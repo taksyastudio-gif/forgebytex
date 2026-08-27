@@ -17,7 +17,7 @@ const formatMessage = (rawMessage: string): string => {
 };
 
 const buildExplanation = (rawText: string, level: 'error' | 'warning'): string => {
-  if (/expected ['"]?;['"]? at end of declaration|expected ['"]?;['"]? before|missing semicolon/i.test(rawText)) {
+  if (/expected ['"]?;['"]? (?:after expression|at end of declaration|before)|missing semicolon/i.test(rawText)) {
     return 'A statement is missing its terminating semicolon (;). Add the semicolon at the end of the statement on the highlighted line.';
   }
 
@@ -49,7 +49,7 @@ const buildExplanation = (rawText: string, level: 'error' | 'warning'): string =
     return 'The value being assigned does not match the variable type. Use a value of the correct type for this variable.';
   }
 
-  if (/format specifies type|[-Wformat]|%f.*int|%d.*double/i.test(rawText)) {
+  if (/format specifies type|-Wformat|%f.*int|%d.*double/i.test(rawText)) {
     return 'The format string does not match the variable type. Use a format specifier that matches the value being printed.';
   }
 

@@ -78,8 +78,8 @@ export const FileExplorer: React.FC<
   return (
     <aside
       className={[
-        'bg-[#0b0e17]',
-        'border-r border-slate-800/80',
+        'app-sidebar',
+        'border-r',
         'flex flex-col',
         'transition-[width]',
         'duration-200',
@@ -91,7 +91,7 @@ export const FileExplorer: React.FC<
       <div
         className={[
           'h-9 px-3',
-          'border-b border-slate-800/80',
+          'border-b',
           'flex items-center',
           'text-xs font-mono font-bold',
           'text-slate-400',

@@ -11,54 +11,50 @@ const registerMonacoThemes = (
   monacoInstance: typeof monaco
 ) => {
   const themes: Record<EditorTheme, monaco.editor.IStandaloneThemeData> = {
-    'vs-dark': {
+    black: {
       base: 'vs-dark',
       inherit: true,
       rules: [],
       colors: {
-        'editor.background': '#0f172a',
+        'editor.background': '#05070b',
+        'editor.foreground': '#f8fafc',
+        'editor.lineHighlightBackground': '#10151f',
+        'editor.selectionBackground': '#1e40af70',
+        'editorCursor.foreground': '#38bdf8',
+        'editorIndentGuide.background': '#1f2937',
+        'editorIndentGuide.activeBackground': '#475569',
       },
     },
-    'one-dark': {
-      base: 'vs-dark',
+    white: {
+      base: 'vs',
       inherit: true,
       rules: [],
       colors: {
-        'editor.background': '#1f2329',
-        'editor.foreground': '#abb2bf',
-        'editor.lineHighlightBackground': '#2c313c',
-        'editor.selectionBackground': '#3e4451',
-        'editorCursor.foreground': '#528bff',
-        'editorIndentGuide.background': '#3b4048',
-        'editorIndentGuide.activeBackground': '#4b5263',
+        'editor.background': '#ffffff',
+        'editor.foreground': '#0f172a',
+        'editor.lineHighlightBackground': '#f1f5f9',
+        'editor.selectionBackground': '#bfdbfe',
+        'editorCursor.foreground': '#2563eb',
+        'editorIndentGuide.background': '#dbe2ea',
+        'editorIndentGuide.activeBackground': '#94a3b8',
+        'editorLineNumber.foreground': '#94a3b8',
+        'editorLineNumber.activeForeground': '#334155',
       },
     },
-    monokai: {
+    cyberpunk: {
       base: 'vs-dark',
       inherit: true,
       rules: [],
       colors: {
-        'editor.background': '#272822',
-        'editor.foreground': '#f8f8f2',
-        'editor.lineHighlightBackground': '#3e3d32',
-        'editor.selectionBackground': '#49483e',
-        'editorCursor.foreground': '#f8f8f0',
-        'editorIndentGuide.background': '#3b3a32',
-        'editorIndentGuide.activeBackground': '#75715e',
-      },
-    },
-    'github-dark': {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#0d1117',
-        'editor.foreground': '#c9d1d9',
-        'editor.lineHighlightBackground': '#161b22',
-        'editor.selectionBackground': '#264f78',
-        'editorCursor.foreground': '#c9d1d9',
-        'editorIndentGuide.background': '#30363d',
-        'editorIndentGuide.activeBackground': '#484f58',
+        'editor.background': '#080716',
+        'editor.foreground': '#e2e8f0',
+        'editor.lineHighlightBackground': '#151226',
+        'editor.selectionBackground': '#0e749060',
+        'editorCursor.foreground': '#22d3ee',
+        'editorIndentGuide.background': '#243044',
+        'editorIndentGuide.activeBackground': '#d946ef',
+        'editorLineNumber.foreground': '#64748b',
+        'editorLineNumber.activeForeground': '#67e8f9',
       },
     },
   };
@@ -73,6 +69,7 @@ interface CodeEditorProps {
   language: SupportedLanguage;
   theme: EditorTheme;
   onChange: (value: string) => void;
+  onFocus?: () => void;
   onMount?: (
     editor: monaco.editor.IStandaloneCodeEditor,
     monacoInstance: typeof monaco
@@ -95,10 +92,11 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   language,
   theme,
   onChange,
+  onFocus,
   onMount,
 }) => {
   return (
-    <div className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden bg-[#1e1e1e]">
+    <div className="code-editor-frame relative flex h-full min-h-0 w-full flex-1 overflow-hidden">
       <Editor
         height="100%"
         width="100%"
@@ -109,6 +107,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         }}
         value={code}
         onMount={(editor, monacoInstance) => {
+          editor.onDidFocusEditorText(() => {
+            onFocus?.();
+          });
+
           if (onMount) onMount(editor, monacoInstance as unknown as typeof monaco);
         }}
         onChange={(value) => onChange(value ?? '')}

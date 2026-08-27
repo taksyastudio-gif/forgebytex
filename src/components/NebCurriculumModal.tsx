@@ -17,8 +17,8 @@ export const NebCurriculumModal: React.FC<NebCurriculumModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-[min(900px,95%)] max-h-[85vh] overflow-auto rounded-2xl bg-[#0b0e17] p-4 shadow-2xl border border-slate-800">
+    <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="modal-panel w-[min(900px,95%)] max-h-[85vh] overflow-auto rounded-2xl p-4 shadow-2xl border">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-bold">NEB Grade 12 Curriculum Library</h2>
           <button onClick={onClose} className="text-sm text-slate-400 hover:text-white">Close</button>

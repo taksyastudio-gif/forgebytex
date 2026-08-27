@@ -1,47 +1,38 @@
 import { ExecutionClient } from './execution-client';
 
 export type {
-  CompileResult,
   ExecutionResult,
 } from './execution-protocol';
 
-export type CompileRequest = {
+export type PythonRequest = {
   type: 'compile';
   requestId: string;
   code: string;
   stdin?: string;
 };
 
-export type WorkerInputRequest = {
-  type: 'stdin';
-  requestId: string;
-  input: string;
-};
-
 /**
- * C pipeline client.
+ * Python pipeline client.
  *
- * The full worker lifecycle (creation, message routing, stale-event
- * filtering, activity watchdog, stdin forwarding, stop/teardown) lives
- * in the shared ExecutionClient; this module only binds it to the C
- * toolchain worker and preserves the historical `compilerClient` API.
+ * Wraps the shared ExecutionClient for the Python runtime worker.
+ * Follows the same pattern as CompilerClientFacade for consistency.
  */
-class CompilerClientFacade {
+class PythonClientFacade {
   private readonly inner: ExecutionClient;
 
   constructor() {
     this.inner = new ExecutionClient(
-      () => new URL('./compiler.worker.ts', import.meta.url),
+      () => new URL('./python.worker.ts', import.meta.url),
       { type: 'module' }
     );
   }
 
-  compile(
+  run(
     code: string,
     stdin = '',
     hooks = {}
   ) {
-    return this.inner.compile(code, stdin, hooks);
+    return this.inner.run(code, stdin, hooks);
   }
 
   sendInput(input: string): boolean {
@@ -61,5 +52,5 @@ class CompilerClientFacade {
   }
 }
 
-export const compilerClient =
-  new CompilerClientFacade();
+export const pythonClient =
+  new PythonClientFacade();

@@ -6,10 +6,9 @@ export type SupportedLanguage =
   | 'plaintext';
 
 export type EditorTheme =
-  | 'vs-dark'
-  | 'one-dark'
-  | 'monokai'
-  | 'github-dark';
+  | 'black'
+  | 'white'
+  | 'cyberpunk';
 
 export type ConsoleTab = 'terminal' | 'preview';
 
@@ -18,4 +17,17 @@ export interface FileItem {
   name: string;
   language: SupportedLanguage;
   content: string;
+}
+
+export type ProgramInputBaseId =
+  | 'text'
+  | 'integer'
+  | 'decimal'
+  | 'character'
+  | 'boolean';
+
+export interface ProgramInputItem {
+  id: string;
+  baseId: ProgramInputBaseId;
+  value: string;
 }

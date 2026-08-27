@@ -20,11 +20,15 @@ import { NebCurriculumModal } from './components/NebCurriculumModal';
 import { nebPrograms } from './data/nebGrade12Curriculum';
 import {
   compilerClient,
-  type ExecutionStatus,
 } from './compiler/compiler-client';
+import {
+  pythonClient,
+} from './compiler/python-client';
+import type { ExecutionStatus } from './compiler/execution-protocol';
 
 import type {
   FileItem,
+  ProgramInputItem,
   SupportedLanguage,
   EditorTheme,
 } from './types/byteplay';
@@ -50,12 +54,35 @@ int main() {
     content: `<h1>Hello forgebyteX</h1>
 <p>Interactive Web Sandbox</p>`,
   },
+  {
+    id: '3',
+    name: 'main.py',
+    language: 'python',
+    content: `print("Hello from Python in forgebyteX!")
+
+for i in range(5):
+    print(i)`,
+  },
 ];
 
 const INITIAL_TERMINAL_LOGS = [
-  'forgebyteX Arena Environment Ready.',
-  'Select a file or press "Run Code" to execute.',
+  'forgebyteX ready. Open a file and click Run Code (or press F5).',
 ];
+
+const THEME_STORAGE_KEY = 'forgebytex-theme';
+
+const isEditorTheme = (value: string | null): value is EditorTheme =>
+  value === 'black' || value === 'white' || value === 'cyberpunk';
+
+const getInitialTheme = (): EditorTheme => {
+  if (typeof window === 'undefined') {
+    return 'black';
+  }
+
+  const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+
+  return isEditorTheme(storedTheme) ? storedTheme : 'black';
+};
 
 const BUGGY_C_CODE = `#include <stdio.h>
 
@@ -101,17 +128,26 @@ export const App: React.FC = () => {
     useState<SupportedLanguage>('c');
 
   const [activeTheme, setActiveTheme] =
-    useState<EditorTheme>('vs-dark');
+    useState<EditorTheme>(getInitialTheme);
 
   const [isRunning, setIsRunning] = useState(false);
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>('idle');
   const [isNebModalOpen, setIsNebModalOpen] = useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(false);
 
   const [terminalLogs, setTerminalLogs] = useState<string[]>(
     INITIAL_TERMINAL_LOGS
   );
+  /**
+   * Incrementing this counter tells InteractiveTerminal to hard-clear
+   * itself, bypassing the append-only logic.
+   */
+  const [clearGeneration, setClearGeneration] = useState(0);
+
   const [queuedInput, setQueuedInput] = useState('');
   const [terminalInput, setTerminalInput] = useState('');
+  const [programInputs, setProgramInputs] =
+    useState<ProgramInputItem[]>([]);
 
   const [htmlPreviewDoc, setHtmlPreviewDoc] =
     useState<string | null>(null);
@@ -120,7 +156,7 @@ export const App: React.FC = () => {
     useState(false);
 
   const [terminalWidth, setTerminalWidth] =
-    useState(450);
+    useState(560);
 
   /* ============================================================
      FILE STATE
@@ -252,6 +288,14 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = activeTheme;
+    window.localStorage.setItem(
+      THEME_STORAGE_KEY,
+      activeTheme
+    );
+  }, [activeTheme]);
+
+  useEffect(() => {
     const executionTimer = executionTimerRef.current;
 
     window.addEventListener(
@@ -283,6 +327,25 @@ export const App: React.FC = () => {
       }
     };
   }, [handleMouseMove, handleMouseUp]);
+
+  /* ============================================================
+     KEYBOARD SHORTCUT — F5 to Run
+  ============================================================ */
+
+  // handleRun is defined below; use a ref so the keydown handler
+  // always calls the latest version without needing to be re-registered.
+  const handleRunRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F5') {
+        e.preventDefault();
+        handleRunRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   /* ============================================================
      FILE SELECTION
@@ -377,166 +440,285 @@ export const App: React.FC = () => {
       return;
     }
 
+    // ── Stop a running execution ──────────────────────────────
     if (isRunning) {
-      compilerClient.stopCurrent();
+      if (activeLanguage === 'c') {
+        compilerClient.stopCurrent();
+      } else if (activeLanguage === 'python') {
+        pythonClient.stopCurrent();
+      }
       setIsRunning(false);
       setExecutionStatus('stopped');
-      setTerminalLogs((previousLogs) => [
-        ...previousLogs,
+      setTerminalLogs((prev) => [
+        ...prev,
         '> Execution stopped.',
       ]);
       return;
     }
 
     setIsRunning(true);
-    setExecutionStatus('running');
-
+    setExecutionStatus('compiling');
     clearErrorState();
 
-    setTerminalLogs((previousLogs) => [
-      ...previousLogs,
-      `> Executing ${activeFile.name}...`,
-    ]);
-
+    // ── HTML preview path ─────────────────────────────────────
     if (activeLanguage === 'html') {
       setHtmlPreviewDoc(activeFile.content);
-
-      setTerminalLogs((previousLogs) => [
-        ...previousLogs,
-        'HTML preview updated successfully.',
+      setTerminalLogs((prev) => [
+        ...prev,
+        `> Rendering ${activeFile.name}...`,
+        'HTML preview updated.',
       ]);
-
       setIsRunning(false);
       setExecutionStatus('completed');
       return;
     }
 
-    const stdin = (terminalInput || queuedInput).trim();
-    setQueuedInput('');
-    setTerminalInput('');
+    // ── C compilation path ────────────────────────────────────
+    if (activeLanguage === 'c') {
+      // Collect stdin. Use terminalInput / queuedInput / programInputs.
+      const stdin = (
+        terminalInput ||
+        queuedInput ||
+        programInputs
+          .map((input) => input.value)
+          .join('\n')
+      ).trim();
 
-    compilerClient
-      .compile(
-        activeFile.content,
-        stdin,
-        (_stream, text) => {
-          setTerminalLogs((previousLogs) => {
-            const normalizedText = text.replace(/\r\n/g, '\n');
-            if (!normalizedText) {
-              return previousLogs;
+      setTerminalLogs((prev) => [
+        ...prev,
+        `> Compiling ${activeFile.name}…`,
+      ]);
+
+      const code = activeFile.content;
+
+      compilerClient
+        .compile(
+          code,
+          stdin,
+          // ── Streaming stdout/stderr callback ──────────────
+          { onOutput: (_stream: 'stdout' | 'stderr', text: string) => {
+            if (!text) return;
+            setTerminalLogs((prev) => [...prev, text]);
+          },
+          // ── Status update callback ────────────────────────
+          onStatus: (status: ExecutionStatus) => {
+            setExecutionStatus(status);
+            if (
+              status === 'completed' ||
+              status === 'failed' ||
+              status === 'stopped' ||
+              status === 'timeout'
+            ) {
+              setIsRunning(false);
             }
+          }}
+        )
+        .then((result) => {
+          const finalStatus =
+            result.status ??
+            (result.success ? 'completed' : 'failed');
 
-            const lastPrompt = previousLogs[previousLogs.length - 1] ?? '';
-            const trimmedText =
-              lastPrompt && normalizedText.startsWith(lastPrompt)
-                ? normalizedText.slice(lastPrompt.length)
-                : normalizedText;
-
-            return [...previousLogs, trimmedText];
-          });
-        },
-        (status) => {
-          setExecutionStatus(status);
-          if (
-            status === 'completed' ||
-            status === 'failed' ||
-            status === 'stopped' ||
-            status === 'timeout'
-          ) {
-            setIsRunning(false);
-          }
-        }
-      )
-      .then((result) => {
-        setExecutionStatus(result.status ?? (result.success ? 'completed' : 'failed'));
-
-        if (result.success && result.warnings) {
-          const friendly = interpretCompilerOutput(result.warnings);
-          setErrors(friendly);
-
-          if (
-            monacoRef.current &&
-            editorRef.current
-          ) {
-            applyMonacoMarkers(
-              monacoRef.current,
-              editorRef.current,
-              friendly
-            );
-
-            if (friendly.length > 0) {
-              const first = friendly[0];
-              goToLineColumn(
-                editorRef.current,
-                first.line,
-                first.column
-              );
-              setSelectedErrorId(first.id);
-            }
-          }
-          return;
-        }
-
-        if (!result.success) {
-          const friendly = interpretCompilerOutput(
-            result.error || result.output || 'Compilation failed.'
-          );
-
-          setErrors(friendly);
-
-          if (
-            monacoRef.current &&
-            editorRef.current
-          ) {
-            applyMonacoMarkers(
-              monacoRef.current,
-              editorRef.current,
-              friendly
-            );
-
-            if (friendly.length > 0) {
-              const first = friendly[0];
-              goToLineColumn(
-                editorRef.current,
-                first.line,
-                first.column
-              );
-              setSelectedErrorId(first.id);
-            }
-          }
-        } else {
-          clearErrorState();
-        }
-      })
-      .catch((err) => {
-        setExecutionStatus('failed');
-        setTerminalLogs((previousLogs) => [
-          ...previousLogs,
-          `Compiler error: ${String(err)}`,
-        ]);
-      })
-      .finally(() => {
-        if (executionStatus !== 'waiting-input') {
+          setExecutionStatus(finalStatus);
           setIsRunning(false);
-        }
-      });
+
+          // ── Show compilation errors ───────────────────────
+          if (!result.success) {
+            const errorText =
+              result.error || result.output || 'Compilation failed.';
+
+            // Always show raw error in terminal so nothing is hidden
+            setTerminalLogs((prev) => [
+              ...prev,
+              errorText,
+            ]);
+
+            const friendly = interpretCompilerOutput(errorText);
+            setErrors(friendly);
+
+            if (monacoRef.current && editorRef.current) {
+              applyMonacoMarkers(
+                monacoRef.current,
+                editorRef.current,
+                friendly
+              );
+
+              if (friendly.length > 0) {
+                const first = friendly[0];
+                goToLineColumn(
+                  editorRef.current,
+                  first.line,
+                  first.column
+                );
+                setSelectedErrorId(first.id);
+              }
+            }
+            return;
+          }
+
+          // ── Show compiler warnings on success ─────────────
+          if (result.warnings) {
+            const friendly = interpretCompilerOutput(result.warnings);
+            setErrors(friendly);
+
+            if (monacoRef.current && editorRef.current) {
+              applyMonacoMarkers(
+                monacoRef.current,
+                editorRef.current,
+                friendly
+              );
+
+              if (friendly.length > 0) {
+                const first = friendly[0];
+                goToLineColumn(
+                  editorRef.current,
+                  first.line,
+                  first.column
+                );
+                setSelectedErrorId(first.id);
+              }
+            }
+          } else {
+            clearErrorState();
+          }
+
+          // Show exit status only if no stdout was streamed (empty output)
+          if (!result.output?.trim()) {
+            setTerminalLogs((prev) => [
+              ...prev,
+              '> Process exited with code 0.',
+            ]);
+          }
+        })
+        .catch((err: unknown) => {
+          setExecutionStatus('failed');
+          setIsRunning(false);
+          const message = err instanceof Error ? err.message : String(err);
+          setTerminalLogs((prev) => [
+            ...prev,
+            `> Error: ${message}`,
+          ]);
+        });
+      return;
+    }
+
+    // ── Python execution path ─────────────────────────────────
+    if (activeLanguage === 'python') {
+      const stdin = (
+        terminalInput ||
+        queuedInput ||
+        programInputs
+          .map((input) => input.value)
+          .join('\n')
+      ).trim();
+
+      setTerminalLogs((prev) => [
+        ...prev,
+        `> Running ${activeFile.name}…`,
+      ]);
+
+      const code = activeFile.content;
+
+      pythonClient
+        .run(
+          code,
+          stdin,
+          // ── Streaming stdout/stderr callback ──────────────
+          { onOutput: (_stream: 'stdout' | 'stderr', text: string) => {
+            if (!text) return;
+            setTerminalLogs((prev) => [...prev, text]);
+          },
+          // ── Status update callback ────────────────────────
+          onStatus: (status: ExecutionStatus) => {
+            setExecutionStatus(status);
+            if (
+              status === 'completed' ||
+              status === 'failed' ||
+              status === 'stopped' ||
+              status === 'timeout'
+            ) {
+              setIsRunning(false);
+            }
+          }}
+        )
+        .then((result) => {
+          const finalStatus =
+            result.status ??
+            (result.success ? 'completed' : 'failed');
+
+          setExecutionStatus(finalStatus);
+          setIsRunning(false);
+
+          // ── Show Python errors ─────────────────────────────
+          if (!result.success) {
+            const errorText =
+              result.error || result.output || 'Execution failed.';
+
+            setTerminalLogs((prev) => [
+              ...prev,
+              errorText,
+            ]);
+
+            // For Python, we show the error directly in terminal
+            // rather than using the C-specific error interpreter
+            setErrors([]);
+            clearErrorState();
+            return;
+          }
+
+          clearErrorState();
+
+          // Show exit status only if no stdout was streamed (empty output)
+          if (!result.output?.trim()) {
+            setTerminalLogs((prev) => [
+              ...prev,
+              '> Process exited with code 0.',
+            ]);
+          }
+        })
+        .catch((err: unknown) => {
+          setExecutionStatus('failed');
+          setIsRunning(false);
+          const message = err instanceof Error ? err.message : String(err);
+          setTerminalLogs((prev) => [
+            ...prev,
+            `> Error: ${message}`,
+          ]);
+        });
+      return;
+    }
+
+    // ── Unsupported language ───────────────────────────────────
+    setTerminalLogs((prev) => [
+      ...prev,
+      `> Language '${activeLanguage}' is not yet supported for execution.`,
+    ]);
+    setIsRunning(false);
+    setExecutionStatus('failed');
   }, [
     activeFile,
     activeLanguage,
     clearErrorState,
-    executionStatus,
     isRunning,
+    programInputs,
     queuedInput,
     terminalInput,
   ]);
+
+  // Keep the ref current so F5 always invokes the latest handleRun
+  useEffect(() => {
+    handleRunRef.current = handleRun;
+  }, [handleRun]);
+
   /* ============================================================
      CLEAR TERMINAL
   ============================================================ */
 
   const handleClearTerminal = useCallback(() => {
     setTerminalLogs([]);
+    setClearGeneration((g) => g + 1); // triggers hard clear in xterm
     setQueuedInput('');
     setTerminalInput('');
+    setProgramInputs([]);
     setHtmlPreviewDoc(null);
     setExecutionStatus('idle');
   }, []);
@@ -751,7 +933,7 @@ export const App: React.FC = () => {
   ============================================================ */
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#080b12] text-slate-100 overflow-hidden font-sans">
+    <div className="app-shell flex flex-col h-screen w-screen bg-[#080b12] text-slate-100 overflow-hidden font-sans">
 
       {/* ========================================================
           HEADER
@@ -769,6 +951,10 @@ export const App: React.FC = () => {
         onExport={handleExport}
         onLanguageSelect={handleLanguageSelect}
         onThemeSelect={setActiveTheme}
+        isFocusMode={isFocusMode}
+        onToggleFocusMode={() =>
+          setIsFocusMode((previous) => !previous)
+        }
       />
 
       {/* ========================================================
@@ -864,7 +1050,11 @@ export const App: React.FC = () => {
             terminalLogs={terminalLogs}
             htmlPreviewDoc={htmlPreviewDoc}
             onSendInput={(input) => {
-              compilerClient.sendInput(input);
+              if (activeLanguage === 'c') {
+                compilerClient.sendInput(input);
+              } else if (activeLanguage === 'python') {
+                pythonClient.sendInput(input);
+              }
               setQueuedInput((previous) => {
                 const next = previous ? `${previous}\n${input}` : input;
                 return next;
@@ -873,6 +1063,8 @@ export const App: React.FC = () => {
             }}
             onClearTerminal={handleClearTerminal}
             isWaitingForInput={executionStatus === 'waiting-input'}
+            executionStatus={executionStatus}
+            clearGeneration={clearGeneration}
           />
 
           <NebCurriculumModal
