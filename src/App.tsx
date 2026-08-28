@@ -17,6 +17,8 @@ import {
 import { ConsolePreviewPanel } from './components/ConsolePreviewPanel';
 import { FriendlyErrorPanel } from './components/FriendlyErrorPanel';
 import { NebCurriculumModal } from './components/NebCurriculumModal';
+import { FeedbackModal } from './components/FeedbackModal';
+import { WelcomeModal, shouldShowWelcome } from './components/WelcomeModal';
 import { nebPrograms } from './data/nebGrade12Curriculum';
 import {
   compilerClient,
@@ -31,6 +33,7 @@ import type {
   ProgramInputItem,
   SupportedLanguage,
   EditorTheme,
+  TerminalPosition,
 } from './types/byteplay';
 
 import type { FriendlyError } from './utils/error-interpreter';
@@ -158,6 +161,9 @@ export const App: React.FC = () => {
   const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>('idle');
   const [isNebModalOpen, setIsNebModalOpen] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(shouldShowWelcome());
+  const [terminalPosition, setTerminalPosition] = useState<TerminalPosition>('bottom');
 
   const [terminalLogs, setTerminalLogs] = useState<string[]>(
     INITIAL_TERMINAL_LOGS
@@ -179,8 +185,8 @@ export const App: React.FC = () => {
   const [isExplorerCollapsed, setIsExplorerCollapsed] =
     useState(false);
 
-  const [terminalWidth, setTerminalWidth] =
-    useState(560);
+  const [terminalSize, setTerminalSize] =
+    useState(280);
 
   /* ============================================================
      FILE STATE
@@ -243,10 +249,68 @@ export const App: React.FC = () => {
   }, []);
 
   /* ============================================================
-     RESIZER STATE
+     RESIZER (VERTICAL & HORIZONTAL RESIZE FOR TERMINAL SIZE)
   ============================================================ */
 
   const isDraggingRef = useRef(false);
+
+  const handleMouseDown = useCallback(() => {
+    isDraggingRef.current = true;
+
+    const cursor = terminalPosition === 'bottom' ? 'row-resize' : 'col-resize';
+    document.body.style.cursor = cursor;
+    document.body.style.userSelect = 'none';
+  }, [terminalPosition]);
+
+  const handleMouseMove = useCallback((event: MouseEvent) => {
+    if (!isDraggingRef.current) {
+      return;
+    }
+
+    const minimumTerminalSize = 120;
+    const minimumEditorSize = 180;
+
+    if (terminalPosition === 'bottom') {
+      // Vertical resize
+      const newHeight = window.innerHeight - event.clientY;
+      const maximumTerminalHeight = Math.max(
+        minimumTerminalSize,
+        window.innerHeight - minimumEditorSize
+      );
+
+      const clampedHeight = Math.min(
+        Math.max(newHeight, minimumTerminalSize),
+        maximumTerminalHeight
+      );
+
+      setTerminalSize(clampedHeight);
+    } else {
+      // Horizontal resize
+      const newWidth = window.innerWidth - event.clientX;
+      const maximumTerminalWidth = Math.max(
+        minimumTerminalSize,
+        window.innerWidth - minimumEditorSize
+      );
+
+      const clampedWidth = Math.min(
+        Math.max(newWidth, minimumTerminalSize),
+        maximumTerminalWidth
+      );
+
+      setTerminalSize(clampedWidth);
+    }
+  }, [terminalPosition]);
+
+  const handleMouseUp = useCallback(() => {
+    if (!isDraggingRef.current) {
+      return;
+    }
+
+    isDraggingRef.current = false;
+
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, []);
 
   /* ============================================================
      EXECUTION STATE
@@ -263,53 +327,6 @@ export const App: React.FC = () => {
     files.find((file) => file.id === activeFileId) ??
     files[0] ??
     null;
-
-  /* ============================================================
-     RESIZER
-  ============================================================ */
-
-  const handleMouseDown = useCallback(() => {
-    isDraggingRef.current = true;
-
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  }, []);
-
-  const handleMouseMove = useCallback((event: MouseEvent) => {
-    if (!isDraggingRef.current) {
-      return;
-    }
-
-    const minimumTerminalWidth = 250;
-    const minimumEditorWidth = 320;
-
-    const newWidth =
-      window.innerWidth - event.clientX;
-
-    const maximumTerminalWidth =
-      Math.max(
-        minimumTerminalWidth,
-        window.innerWidth - minimumEditorWidth
-      );
-
-    const clampedWidth = Math.min(
-      Math.max(newWidth, minimumTerminalWidth),
-      maximumTerminalWidth
-    );
-
-    setTerminalWidth(clampedWidth);
-  }, []);
-
-  const handleMouseUp = useCallback(() => {
-    if (!isDraggingRef.current) {
-      return;
-    }
-
-    isDraggingRef.current = false;
-
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = activeTheme;
@@ -356,8 +373,6 @@ export const App: React.FC = () => {
      KEYBOARD SHORTCUT — F5 to Run
   ============================================================ */
 
-  // handleRun is defined below; use a ref so the keydown handler
-  // always calls the latest version without needing to be re-registered.
   const handleRunRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -508,12 +523,24 @@ export const App: React.FC = () => {
     clearErrorState();
 
     // ── HTML preview path ─────────────────────────────────────
-    if (activeLanguage === 'html') {
-      setHtmlPreviewDoc(activeFile.content);
+    if (activeLanguage === 'html' || activeFile.language === 'html' || activeFile.language === 'css' || activeFile.language === 'javascript') {
+      const htmlFile = files.find((f) => f.language === 'html');
+      const cssFile = files.find((f) => f.language === 'css');
+      const jsFile = files.find((f) => f.language === 'javascript');
+
+      let combinedDoc = htmlFile ? htmlFile.content : activeFile.content;
+      if (cssFile && combinedDoc.includes('</head>')) {
+        combinedDoc = combinedDoc.replace('</head>', `<style>${cssFile.content}</style></head>`);
+      }
+      if (jsFile && combinedDoc.includes('</body>')) {
+        combinedDoc = combinedDoc.replace('</body>', `<script>${jsFile.content}</script></body>`);
+      }
+
+      setHtmlPreviewDoc(combinedDoc);
       setTerminalLogs((prev) => [
         ...prev,
-        `> Rendering ${activeFile.name}...`,
-        'HTML preview updated.',
+        `> Rendering web project preview...`,
+        'HTML/CSS/JS preview updated.',
       ]);
       setIsRunning(false);
       setExecutionStatus('completed');
@@ -522,7 +549,6 @@ export const App: React.FC = () => {
 
     // ── C compilation path ────────────────────────────────────
     if (activeLanguage === 'c') {
-      // Collect stdin. Use terminalInput / queuedInput / programInputs.
       const stdin = (
         terminalInput ||
         queuedInput ||
@@ -1020,6 +1046,7 @@ export const App: React.FC = () => {
         onToggleFocusMode={() =>
           setIsFocusMode((previous) => !previous)
         }
+        onFeedbackClick={() => setIsFeedbackModalOpen(true)}
       />
 
       {/* ========================================================
@@ -1045,104 +1072,198 @@ export const App: React.FC = () => {
         />
 
         {/* ======================================================
-            CODE EDITOR
+            MAIN IDE AREA (EDITOR + TERMINAL)
         ======================================================= */}
 
-        <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden">
+        {terminalPosition === 'bottom' ? (
+          // BOTTOM LAYOUT: Vertical split
+          <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden bg-app-bg">
+            {/* TOP: CODE EDITOR */}
+            <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+              {activeFile ? (
+                <CodeEditor
+                  code={activeFile.content}
+                  language={activeFile.language}
+                  theme={activeTheme}
+                  files={files}
+                  activeFileId={activeFileId}
+                  onSelectFile={handleFileSelect}
+                  onChange={handleCodeChange}
+                  onMount={handleEditorMount}
+                />
+              ) : (
+                <div className="flex-1 flex items-center justify-center text-muted text-sm">
+                  No file selected.
+                </div>
+              )}
 
-          {activeFile ? (
-            <CodeEditor
-              code={activeFile.content}
-              language={activeLanguage}
-              theme={activeTheme}
-              onChange={handleCodeChange}
-              onMount={handleEditorMount}
-            />
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-              No file selected.
+              {/* FRIENDLY ERROR PANEL */}
+              {errors.length > 0 && (
+                <FriendlyErrorPanel
+                  errors={errors}
+                  selectedErrorId={selectedErrorId}
+                  showRawError={showRawError}
+                  onErrorSelect={(error) =>
+                    setSelectedErrorId(error.id)
+                  }
+                  onToggleRawError={() =>
+                    setShowRawError(
+                      (previous) => !previous
+                    )
+                  }
+                />
+              )}
             </div>
-          )}
 
-          {/* ====================================================
-              FRIENDLY ERROR PANEL
-          ===================================================== */}
+            {/* HORIZONTAL SPLIT RESIZER HANDLE */}
+            <div
+              onMouseDown={handleMouseDown}
+              className="h-1 bg-surface-soft hover:bg-indigo-500 cursor-row-resize flex items-center justify-center transition-colors group z-20 shrink-0 border-t border-theme"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize terminal panel"
+            >
+              <div className="h-0.5 w-8 bg-border-strong group-hover:bg-white rounded-full transition-colors" />
+            </div>
 
-          {errors.length > 0 && (
-            <FriendlyErrorPanel
-              errors={errors}
-              selectedErrorId={selectedErrorId}
-              showRawError={showRawError}
-              onErrorSelect={(error) =>
-                setSelectedErrorId(error.id)
-              }
-              onToggleRawError={() =>
-                setShowRawError(
-                  (previous) => !previous
-                )
-              }
-            />
-          )}
+            {/* BOTTOM: TERMINAL / PREVIEW PANEL */}
+            <div
+              style={{
+                height: `${terminalSize}px`,
+              }}
+              className="shrink-0 flex flex-col min-w-0 w-full overflow-hidden bg-surface"
+            >
+              <ConsolePreviewPanel
+                activeLanguage={activeLanguage}
+                activeTheme={activeTheme}
+                terminalLogs={terminalLogs}
+                htmlPreviewDoc={htmlPreviewDoc}
+                onSendInput={(input) => {
+                  if (activeLanguage === 'c') {
+                    compilerClient.sendInput(input);
+                  } else if (activeLanguage === 'python') {
+                    pythonClient.sendInput(input);
+                  }
+                  setQueuedInput((previous) => {
+                    const next = previous ? `${previous}\n${input}` : input;
+                    return next;
+                  });
+                  setTerminalInput(input);
+                }}
+                onClearTerminal={handleClearTerminal}
+                isWaitingForInput={executionStatus === 'waiting-input'}
+                executionStatus={executionStatus}
+                clearGeneration={clearGeneration}
+                terminalPosition={terminalPosition}
+                onTerminalPositionChange={setTerminalPosition}
+              />
+            </div>
+          </div>
+        ) : (
+          // RIGHT LAYOUT: Horizontal split
+          <div className="flex-1 flex min-w-0 h-full relative overflow-hidden bg-app-bg">
+            {/* LEFT: CODE EDITOR */}
+            <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+              {activeFile ? (
+                <CodeEditor
+                  code={activeFile.content}
+                  language={activeFile.language}
+                  theme={activeTheme}
+                  files={files}
+                  activeFileId={activeFileId}
+                  onSelectFile={handleFileSelect}
+                  onChange={handleCodeChange}
+                  onMount={handleEditorMount}
+                />
+              ) : (
+                <div className="flex-1 flex items-center justify-center text-muted text-sm">
+                  No file selected.
+                </div>
+              )}
 
-        </div>
+              {/* FRIENDLY ERROR PANEL */}
+              {errors.length > 0 && (
+                <FriendlyErrorPanel
+                  errors={errors}
+                  selectedErrorId={selectedErrorId}
+                  showRawError={showRawError}
+                  onErrorSelect={(error) =>
+                    setSelectedErrorId(error.id)
+                  }
+                  onToggleRawError={() =>
+                    setShowRawError(
+                      (previous) => !previous
+                    )
+                  }
+                />
+              )}
+            </div>
 
-        {/* ======================================================
-            TERMINAL RESIZER
-        ======================================================= */}
+            {/* VERTICAL SPLIT RESIZER HANDLE */}
+            <div
+              onMouseDown={handleMouseDown}
+              className="w-1 bg-surface-soft hover:bg-indigo-500 cursor-col-resize flex items-center justify-center transition-colors group z-20 shrink-0 border-l border-theme"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize terminal panel"
+            >
+              <div className="w-0.5 h-8 bg-border-strong group-hover:bg-white rounded-full transition-colors" />
+            </div>
 
-        <div
-          onMouseDown={handleMouseDown}
-          className="w-1 bg-slate-800/80 hover:bg-indigo-500 cursor-col-resize flex items-center justify-center transition-colors group z-20 shrink-0"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize terminal panel"
-        >
-          <div className="w-0.5 h-8 bg-slate-600 group-hover:bg-white rounded-full transition-colors" />
-        </div>
-
-        {/* ======================================================
-            TERMINAL / PREVIEW PANEL
-        ======================================================= */}
-
-        <div
-          style={{
-            width: `${terminalWidth}px`,
-          }}
-          className="shrink-0 flex flex-col min-w-0 h-full bg-[#0b0e17] border-l border-slate-800"
-        >
-          <ConsolePreviewPanel
-            activeLanguage={activeLanguage}
-            activeTheme={activeTheme}
-            terminalLogs={terminalLogs}
-            htmlPreviewDoc={htmlPreviewDoc}
-            onSendInput={(input) => {
-              if (activeLanguage === 'c') {
-                compilerClient.sendInput(input);
-              } else if (activeLanguage === 'python') {
-                pythonClient.sendInput(input);
-              }
-              setQueuedInput((previous) => {
-                const next = previous ? `${previous}\n${input}` : input;
-                return next;
-              });
-              setTerminalInput(input);
-            }}
-            onClearTerminal={handleClearTerminal}
-            isWaitingForInput={executionStatus === 'waiting-input'}
-            executionStatus={executionStatus}
-            clearGeneration={clearGeneration}
-          />
-
-          <NebCurriculumModal
-            isOpen={isNebModalOpen}
-            onClose={() => setIsNebModalOpen(false)}
-            programs={nebPrograms}
-            onLoadProgram={handleLoadNebProgram}
-          />
-
-        </div>
-
+            {/* RIGHT: TERMINAL / PREVIEW PANEL */}
+            <div
+              style={{
+                width: `${terminalSize}px`,
+              }}
+              className="shrink-0 flex flex-col min-h-0 overflow-hidden bg-surface"
+            >
+              <ConsolePreviewPanel
+                activeLanguage={activeLanguage}
+                activeTheme={activeTheme}
+                terminalLogs={terminalLogs}
+                htmlPreviewDoc={htmlPreviewDoc}
+                onSendInput={(input) => {
+                  if (activeLanguage === 'c') {
+                    compilerClient.sendInput(input);
+                  } else if (activeLanguage === 'python') {
+                    pythonClient.sendInput(input);
+                  }
+                  setQueuedInput((previous) => {
+                    const next = previous ? `${previous}\n${input}` : input;
+                    return next;
+                  });
+                  setTerminalInput(input);
+                }}
+                onClearTerminal={handleClearTerminal}
+                isWaitingForInput={executionStatus === 'waiting-input'}
+                executionStatus={executionStatus}
+                clearGeneration={clearGeneration}
+                terminalPosition={terminalPosition}
+                onTerminalPositionChange={setTerminalPosition}
+              />
+            </div>
+          </div>
+        )}
       </div>
+
+      <NebCurriculumModal
+        isOpen={isNebModalOpen}
+        onClose={() => setIsNebModalOpen(false)}
+        programs={nebPrograms}
+        onLoadProgram={handleLoadNebProgram}
+      />
+
+      <FeedbackModal
+        isOpen={isFeedbackModalOpen}
+        onClose={() => setIsFeedbackModalOpen(false)}
+        currentTheme={activeTheme}
+        currentLanguage={activeLanguage}
+      />
+
+      <WelcomeModal
+        isOpen={isWelcomeModalOpen}
+        onClose={() => setIsWelcomeModalOpen(false)}
+      />
     </div>
   );
 };

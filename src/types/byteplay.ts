@@ -7,6 +7,8 @@ export type SupportedLanguage =
   | 'sql'
   | 'plaintext';
 
+export type PrimaryLanguage = 'c' | 'python' | 'html' | 'plaintext';
+
 export type EditorTheme =
   | 'black'
   | 'white'
@@ -14,11 +16,14 @@ export type EditorTheme =
 
 export type ConsoleTab = 'terminal' | 'preview';
 
+export type TerminalPosition = 'bottom' | 'right';
+
 export interface FileItem {
   id: string;
   name: string;
   language: SupportedLanguage;
   content: string;
+  isWebProjectFile?: boolean;
 }
 
 export type ProgramInputBaseId =
