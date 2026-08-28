@@ -62,6 +62,18 @@ const LANGUAGES: LanguageOption[] = [
     status: 'LIVE',
   },
   {
+    id: 'css',
+    label: 'CSS3 Styles',
+    shortLabel: 'CSS',
+    status: 'LIVE',
+  },
+  {
+    id: 'javascript',
+    label: 'JavaScript ES6+',
+    shortLabel: 'JS',
+    status: 'LIVE',
+  },
+  {
     id: 'sql',
     label: 'SQLite',
     shortLabel: 'SQL',
@@ -781,7 +793,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             type="button"
             onClick={onClear}
             aria-label="Clear terminal"
-            className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 transition-all hover:bg-slate-800 active:scale-95"
+            className="secondary-action gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium"
           >
             <Trash2 size={13} />
 
@@ -811,7 +823,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             type="button"
             onClick={onReset}
             aria-label="Reset workspace"
-            className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 transition-all hover:bg-slate-800 active:scale-95"
+            className="secondary-action gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium"
           >
             <RotateCcw size={13} />
 
@@ -828,7 +840,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
             type="button"
             onClick={onNewFile}
             aria-label="Create new file"
-            className="flex items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 transition-all hover:bg-slate-800 active:scale-95"
+            className="secondary-action gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium"
           >
             <FilePlus2 size={13} />
 

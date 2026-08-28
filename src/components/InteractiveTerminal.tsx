@@ -3,19 +3,68 @@ import { Terminal } from 'xterm';
 
 import 'xterm/css/xterm.css';
 
+import type { EditorTheme } from '../types/byteplay';
+
 interface InteractiveTerminalProps {
   terminalLogs: string[];
   isWaitingForInput?: boolean;
   onInput: (value: string) => void;
   /** Increment this to hard-clear the terminal (e.g. when user clicks Clear). */
   clearGeneration?: number;
+  theme?: EditorTheme;
 }
+
+const XTERM_THEMES: Record<EditorTheme, import('xterm').ITheme> = {
+  black: {
+    background: '#060910',
+    foreground: '#f8fafc',
+    cursor: '#38bdf8',
+    selectionBackground: '#1e3a8a80',
+    black: '#0f172a',
+    red: '#f87171',
+    green: '#34d399',
+    yellow: '#fbbf24',
+    blue: '#60a5fa',
+    magenta: '#c084fc',
+    cyan: '#22d3ee',
+    white: '#e2e8f0',
+  },
+  white: {
+    background: '#f8fafc',
+    foreground: '#0f172a',
+    cursor: '#2563eb',
+    selectionBackground: '#bfdbfe',
+    black: '#0f172a',
+    red: '#dc2626',
+    green: '#059669',
+    yellow: '#d97706',
+    blue: '#2563eb',
+    magenta: '#9333ea',
+    cyan: '#0891b2',
+    white: '#64748b',
+  },
+  cyberpunk: {
+    background: '#050410',
+    foreground: '#f0f6fc',
+    cursor: '#06b6d4',
+    selectionBackground: 'rgba(6, 182, 212, 0.25)',
+    black: '#0e0c24',
+    red: '#fb7185',
+    green: '#34d399',
+    yellow: '#facc15',
+    blue: '#38bdf8',
+    magenta: '#c084fc',
+    cyan: '#06b6d4',
+    white: '#f0f6fc',
+  },
+};
 
 export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   terminalLogs,
   isWaitingForInput = false,
   onInput,
   clearGeneration = 0,
+  theme = 'black',
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -43,20 +92,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
       fontSize: 13,
       lineHeight: 1.4,
-      theme: {
-        background: '#05070d',
-        foreground: '#e2e8f0',
-        cursor: '#38bdf8',
-        selectionBackground: '#334155',
-        black: '#0f172a',
-        red: '#f87171',
-        green: '#34d399',
-        yellow: '#fbbf24',
-        blue: '#60a5fa',
-        magenta: '#c084fc',
-        cyan: '#22d3ee',
-        white: '#e2e8f0',
-      },
+      theme: XTERM_THEMES[theme] ?? XTERM_THEMES.black,
       scrollback: 5000,
     });
 
@@ -116,6 +152,13 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       terminal.reset();
     }
   }, [clearGeneration]);
+
+  // ── Sync xterm colors when theme changes ─────────────────────────────────
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.theme = XTERM_THEMES[theme] ?? XTERM_THEMES.black;
+  }, [theme]);
 
   // ── Append-only: write only the NEW log entries ──────────────────────────
   useEffect(() => {

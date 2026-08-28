@@ -2,6 +2,8 @@ export type SupportedLanguage =
   | 'c'
   | 'html'
   | 'python'
+  | 'css'
+  | 'javascript'
   | 'sql'
   | 'plaintext';
 

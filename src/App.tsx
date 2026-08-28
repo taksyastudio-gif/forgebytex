@@ -63,6 +63,24 @@ int main() {
 for i in range(5):
     print(i)`,
   },
+  {
+    id: '4',
+    name: 'style.css',
+    language: 'css',
+    content: `/* Custom CSS Styles */
+body {
+  font-family: system-ui, sans-serif;
+  background: #0f172a;
+  color: #f8fafc;
+}`,
+  },
+  {
+    id: '5',
+    name: 'script.js',
+    language: 'javascript',
+    content: `// JavaScript Sandbox
+console.log("Hello from JavaScript in forgebyteX!");`,
+  },
 ];
 
 const INITIAL_TERMINAL_LOGS = [
@@ -109,6 +127,12 @@ const getFileExtension = (language: SupportedLanguage) => {
 
     case 'python':
       return 'py';
+
+    case 'css':
+      return 'css';
+
+    case 'javascript':
+      return 'js';
 
     case 'sql':
       return 'sql';
@@ -414,16 +438,39 @@ export const App: React.FC = () => {
   ============================================================ */
 
   const handleLanguageSelect = useCallback(
-    (language: SupportedLanguage) => {
-      setActiveLanguage(language);
+    (targetLang: SupportedLanguage) => {
+      setActiveLanguage(targetLang);
 
-      /*
-       * We intentionally do NOT change the FileItem.language
-       * here. The language selector represents the current
-       * editor/execution mode.
-       *
-       * File switching will restore the file's own language.
-       */
+      setFiles((currentFiles) => {
+        const matchingFile = currentFiles.find(
+          (f) => f.language === targetLang
+        );
+
+        if (matchingFile) {
+          setActiveFileId(matchingFile.id);
+          return currentFiles;
+        }
+
+        const ext = getFileExtension(targetLang);
+        const existingNames = new Set(currentFiles.map((f) => f.name));
+        let idx = 1;
+        let filename = `untitled-${idx}.${ext}`;
+        while (existingNames.has(filename)) {
+          idx += 1;
+          filename = `untitled-${idx}.${ext}`;
+        }
+
+        const newFile: FileItem = {
+          id: createFileId(),
+          name: filename,
+          language: targetLang,
+          content: '',
+        };
+
+        setActiveFileId(newFile.id);
+        return [...currentFiles, newFile];
+      });
+
       setErrors([]);
       setSelectedErrorId(null);
       setHtmlPreviewDoc(null);
@@ -1065,6 +1112,7 @@ export const App: React.FC = () => {
         >
           <ConsolePreviewPanel
             activeLanguage={activeLanguage}
+            activeTheme={activeTheme}
             terminalLogs={terminalLogs}
             htmlPreviewDoc={htmlPreviewDoc}
             onSendInput={(input) => {

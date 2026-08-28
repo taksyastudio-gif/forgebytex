@@ -40,6 +40,24 @@ const FileIcon: React.FC<{
     );
   }
 
+  if (language === 'css') {
+    return (
+      <FileCode2
+        size={14}
+        className="text-pink-400 shrink-0"
+      />
+    );
+  }
+
+  if (language === 'javascript') {
+    return (
+      <FileCode2
+        size={14}
+        className="text-amber-400 shrink-0"
+      />
+    );
+  }
+
   if (language === 'sql') {
     return (
       <Database
