@@ -484,10 +484,13 @@ export const App: React.FC = () => {
           .join('\n')
       ).trim();
 
-      setTerminalLogs((prev) => [
-        ...prev,
-        `> Compiling ${activeFile.name}…`,
-      ]);
+      let baseLogLength = 0;
+      let highestAttempt = 1;
+
+      setTerminalLogs((prev) => {
+        baseLogLength = prev.length + 1;
+        return [...prev, `> Compiling ${activeFile.name}…`];
+      });
 
       const code = activeFile.content;
 
@@ -496,9 +499,15 @@ export const App: React.FC = () => {
           code,
           stdin,
           // ── Streaming stdout/stderr callback ──────────────
-          { onOutput: (_stream: 'stdout' | 'stderr', text: string) => {
+          { onOutput: (_stream: 'stdout' | 'stderr', text: string, attempt = 1) => {
             if (!text) return;
-            setTerminalLogs((prev) => [...prev, text]);
+            setTerminalLogs((prev) => {
+              if (attempt > highestAttempt) {
+                highestAttempt = attempt;
+                return [...prev.slice(0, baseLogLength), text];
+              }
+              return [...prev, text];
+            });
           },
           // ── Status update callback ────────────────────────
           onStatus: (status: ExecutionStatus) => {
@@ -611,10 +620,13 @@ export const App: React.FC = () => {
           .join('\n')
       ).trim();
 
-      setTerminalLogs((prev) => [
-        ...prev,
-        `> Running ${activeFile.name}…`,
-      ]);
+      let baseLogLength = 0;
+      let highestAttempt = 1;
+
+      setTerminalLogs((prev) => {
+        baseLogLength = prev.length + 1;
+        return [...prev, `> Running ${activeFile.name}…`];
+      });
 
       const code = activeFile.content;
 
@@ -623,9 +635,15 @@ export const App: React.FC = () => {
           code,
           stdin,
           // ── Streaming stdout/stderr callback ──────────────
-          { onOutput: (_stream: 'stdout' | 'stderr', text: string) => {
+          { onOutput: (_stream: 'stdout' | 'stderr', text: string, attempt = 1) => {
             if (!text) return;
-            setTerminalLogs((prev) => [...prev, text]);
+            setTerminalLogs((prev) => {
+              if (attempt > highestAttempt) {
+                highestAttempt = attempt;
+                return [...prev.slice(0, baseLogLength), text];
+              }
+              return [...prev, text];
+            });
           },
           // ── Status update callback ────────────────────────
           onStatus: (status: ExecutionStatus) => {

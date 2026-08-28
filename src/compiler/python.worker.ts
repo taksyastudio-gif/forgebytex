@@ -29,6 +29,15 @@ const getLoadPyodide = async (): Promise<LoadPyodideFn> => {
   return loadPyodideFunc;
 };
 
+const STDIN_REQUIRED_MARKER = '__FORGEBYTEX_STDIN_REQUIRED__';
+
+class StdinRequiredError extends Error {
+  constructor() {
+    super(STDIN_REQUIRED_MARKER);
+    this.name = 'StdinRequiredError';
+  }
+}
+
 type Session = {
   code: string;
   stdin: string;
@@ -46,7 +55,6 @@ const enqueueExecution = (task: () => Promise<void>): void => {
 
 async function runPython(
   code: string,
-  stdinText: string,
   requestId: string,
   attempt: number,
   session: Session
@@ -100,26 +108,60 @@ async function runPython(
         emit('stderr', `Failed to load Pyodide: ${errorMsg}\n`);
         throw loadError;
       }
-
-      // Redirect stdout/stderr to capture output
-      try {
-        session.pyodide.setStdout({
-          batched: (s: string) => {
-            emit('stdout', s);
-          },
-        });
-
-        session.pyodide.setStderr({
-          batched: (s: string) => {
-            emit('stderr', s);
-          },
-        });
-      } catch (streamError) {
-        const errorMsg = streamError instanceof Error ? streamError.message : String(streamError);
-        emit('stderr', `Failed to set streams: ${errorMsg}\n`);
-        throw streamError;
-      }
     }
+
+    // Configure streams for this attempt so emit closure captures current attempt
+    session.pyodide.setStdout({
+      batched: (s: string) => {
+        emit('stdout', s);
+      },
+    });
+
+    session.pyodide.setStderr({
+      batched: (s: string) => {
+        // Drop the traceback line produced when the stdin handler
+        // suspends for more input; it is not a real error.
+        if (s.includes(STDIN_REQUIRED_MARKER)) {
+          return;
+        }
+        emit('stderr', s);
+      },
+    });
+
+    // Clean Pyodide global namespace to ensure pure re-execution
+    try {
+      session.pyodide.runPython(`
+import sys
+main_dict = sys.modules['__main__'].__dict__
+for k in list(main_dict.keys()):
+    if not k.startswith('__'):
+        del main_dict[k]
+`);
+    } catch {
+      // Ignore namespace cleanup errors
+    }
+
+    // Live stdin: read lines from session.stdin buffer starting at offset 0 for this attempt.
+    let stdinOffset = 0;
+    let wasStdinRequired = false;
+
+    session.pyodide.setStdin({
+      stdin: () => {
+        if (stdinOffset < session.stdin.length) {
+          const nl = session.stdin.indexOf('\n', stdinOffset);
+          if (nl !== -1) {
+            const line = session.stdin.slice(stdinOffset, nl);
+            stdinOffset = nl + 1;
+            return line;
+          }
+          const line = session.stdin.slice(stdinOffset);
+          stdinOffset = session.stdin.length;
+          return line;
+        }
+        wasStdinRequired = true;
+        throw new StdinRequiredError();
+      },
+    });
 
     post({
       type: 'status',
@@ -127,13 +169,6 @@ async function runPython(
       status: 'running',
       attempt,
     });
-
-    // Set up stdin if provided
-    if (stdinText) {
-      session.pyodide.setStdin({
-        stdin: () => stdinText,
-      });
-    }
 
     // Run the Python code
     let output = '';
@@ -161,7 +196,26 @@ async function runPython(
       };
     } catch (pythonError) {
       const errorMessage = pythonError instanceof Error ? pythonError.message : String(pythonError);
-      
+
+      // Live stdin suspend: the stdin handler threw to request more
+      // input. Surface it as waiting-input so the client forwards more
+      // via sendInput and re-runs with the accumulated buffer.
+      if (
+        wasStdinRequired ||
+        errorMessage.includes(STDIN_REQUIRED_MARKER) ||
+        errorMessage.includes('Errno 29')
+      ) {
+        return {
+          success: false,
+          output: '',
+          error: '',
+          exitCode: null,
+          waitingForInput: true,
+          status: 'waiting-input',
+          phase: 'run',
+        };
+      }
+
       // Check if this is a syntax error vs runtime error
       if (errorMessage.includes('SyntaxError')) {
         return {
@@ -236,11 +290,16 @@ const runSession = async (
 
   const result = await runPython(
     session.code,
-    session.stdin,
     requestId,
     attempt,
     session
   );
+
+  if (result.waitingForInput) {
+    // Match the C worker: bump attempt so the client replaces (not
+    // appends) the re-streamed output on the resumed run.
+    session.attempt += 1;
+  }
 
   finishRun(requestId, attempt, result);
 };
