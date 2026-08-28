@@ -21,6 +21,9 @@ import type {
   RuntimeRequest,
 } from './execution-protocol';
 
+// browsercc and the WASI shim keep the C toolchain in the browser: Clang and
+// LLD run as WebAssembly, while this worker owns the session state and stdin
+// buffer for the current request.
 class StdinRequiredError extends Error {
   constructor(message = 'stdin is waiting for more input') {
     super(message);
@@ -346,9 +349,9 @@ async function compileAndRun(
     } catch (error) {
       if (error instanceof StdinRequiredError) {
         /*
-         * Program exhausted stdin. Report the suspension as a result
-         * carrying waitingForInput so the client keeps the worker (and
-         * its loaded toolchain) alive for the resumed attempt.
+         * browsercc/WASI cannot suspend and resume the same C stack frame at
+         * scanf(). Report waitingForInput so the client replays the program
+         * from scratch with the accumulated stdin buffer instead.
          */
         return {
           success: false,

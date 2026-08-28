@@ -10,7 +10,11 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.env
+.env.local
 *.local
+public/monaco/
+public/pyodide/
 
 # Editor directories and files
 .vscode/*

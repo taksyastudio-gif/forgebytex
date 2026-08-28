@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { execFile, spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,62 +9,599 @@ const app = express();
 const PORT = Number(process.env.PORT || 3001);
 
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '10mb' }));
 
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, status: 'healthy' });
-});
+function sanitizeEnvironment(toolchainDirectory) {
+  const env = { ...process.env };
 
-function compileCSource(source, stdin = '') {
+  const currentPath = env.PATH || '';
+  if (toolchainDirectory && !currentPath.split(path.delimiter).includes(toolchainDirectory)) {
+    env.PATH = [toolchainDirectory, currentPath].filter(Boolean).join(path.delimiter);
+  } else {
+    env.PATH = currentPath;
+  }
+
+  return env;
+}
+
+function getBinaryName() {
+  return process.platform === 'win32' ? 'main.exe' : 'main';
+}
+
+function terminateProcessTree(child) {
+  if (!child || !child.pid) {
+    return;
+  }
+
+  try {
+    if (process.platform === 'win32') {
+      if (child.kill()) {
+        return;
+      }
+
+      spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      return;
+    }
+
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    // Ignore cleanup failures; the process may already be gone.
+  }
+}
+
+async function removeDirectory(directoryPath) {
+  if (!directoryPath) {
+    return;
+  }
+
+  try {
+    await fs.promises.rm(directoryPath, {
+      recursive: true,
+      force: true,
+    });
+  } catch {
+    // Ignore cleanup errors to avoid crashing the server.
+  }
+}
+
+function spawnNativeProgram(command, args, options, attempt = 1) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, options);
+    let settled = false;
+
+    child.once('spawn', () => {
+      settled = true;
+      resolve(child);
+    });
+
+    child.once('error', (error) => {
+      if (!settled && error?.code === 'UNKNOWN' && attempt < 3) {
+        setTimeout(() => {
+          spawnNativeProgram(command, args, options, attempt + 1).then(resolve, reject);
+        }, 100);
+        return;
+      }
+
+      reject(error);
+    });
+  });
+}
+
+function detectGcc() {
+  const likelyPaths = [
+    process.env.PATH ? process.env.PATH.split(path.delimiter) : [],
+    [
+      'C:\\Users\\acer\\AppData\\Local\\Microsoft\\WinGet\\Packages\\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\mingw64\\bin',
+      'C:\\Program Files\\WinLibs\\mingw64\\bin',
+      'C:\\mingw64\\bin',
+      'C:\\msys64\\ucrt64\\bin',
+      'C:\\msys64\\mingw64\\bin',
+    ],
+  ].flat();
+
+  for (const candidatePath of likelyPaths) {
+    if (!candidatePath || !candidatePath.trim()) {
+      continue;
+    }
+
+    const candidate = path.join(candidatePath.trim(), process.platform === 'win32' ? 'gcc.exe' : 'gcc');
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+
+    const probe = spawnSync(candidate, ['--version'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    if (!probe.error && probe.stdout) {
+      const raw = String(probe.stdout || '').trim();
+      const version = raw.split(/\r?\n/)[0] || 'unknown';
+
+      return {
+        language: 'c',
+        runtime: 'gcc',
+        available: true,
+        executable: candidate,
+        path: candidate,
+        version,
+        status: 'ready',
+        message: 'GCC detected and ready for native execution.',
+      };
+    }
+  }
+
+  const executableName = process.platform === 'win32' ? 'gcc.exe' : 'gcc';
+  const baseProbe = spawnSync(executableName, ['--version'], {
+    encoding: 'utf8',
+    timeout: 5000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (!baseProbe.error && baseProbe.stdout) {
+    const raw = String(baseProbe.stdout || '').trim();
+    const version = raw.split(/\r?\n/)[0] || 'unknown';
+
+    return {
+      language: 'c',
+      runtime: 'gcc',
+      available: true,
+      executable: executableName,
+      path: executableName,
+      version,
+      status: 'ready',
+      message: 'GCC detected and ready for native execution.',
+    };
+  }
+
+  if (process.platform === 'win32') {
+    const whereProbe = spawnSync('where', ['gcc'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    if (!whereProbe.error && whereProbe.stdout) {
+      const pathValue = String(whereProbe.stdout).split(/\r?\n/)[0]?.trim();
+      if (pathValue) {
+        return {
+          language: 'c',
+          runtime: 'gcc',
+          available: true,
+          executable: pathValue,
+          path: pathValue,
+          version: 'detected via where',
+          status: 'ready',
+          message: 'GCC detected on PATH.',
+        };
+      }
+    }
+  }
+
+  return {
+    language: 'c',
+    runtime: 'gcc',
+    available: false,
+    executable: null,
+    path: null,
+    version: null,
+    status: 'missing',
+    message: 'GCC was not found on this computer. Install a C toolchain before running native execution.',
+  };
+}
+
+async function compileCSource(source, stdin = '') {
   return new Promise((resolve) => {
-    const gccCheck = spawnSync('gcc', ['--version'], { encoding: 'utf8', timeout: 5000 });
-    if (gccCheck.error || !gccCheck.stdout) {
+    const gccCheck = detectGcc();
+    if (!gccCheck.available) {
       return resolve({
         success: false,
         output: '',
-        error: 'gcc is not installed or not available in PATH. Install build-essential/gcc in the runtime (Docker/Render/Linux) before compiling C programs.',
+        error: gccCheck.message,
         exitCode: 127,
       });
     }
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forgebyte-'));
     const sourcePath = path.join(tempDir, 'main.c');
-    const binaryPath = path.join(tempDir, 'main');
+    const binaryPath = path.join(tempDir, getBinaryName());
 
-    fs.writeFileSync(sourcePath, source, 'utf8');
+    try {
+      fs.writeFileSync(sourcePath, source, 'utf8');
+    } catch (error) {
+      return resolve({
+        success: false,
+        output: '',
+        error: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+      });
+    }
 
     const compileTimeoutMs = 15000;
-    execFile(
-      'gcc',
+    const compilerCommand = gccCheck.path && gccCheck.path.trim() ? gccCheck.path : 'gcc';
+    const compiler = spawn(
+      compilerCommand,
       ['-std=c17', '-O2', '-o', binaryPath, sourcePath],
-      { timeout: compileTimeoutMs, maxBuffer: 10 * 1024 * 1024 },
-      (compileError, _compileStdout, compileStderr) => {
-        if (compileError) {
-          return resolve({
-            success: false,
-            output: '',
-            error: compileStderr || compileError.message,
-            exitCode: compileError.code ?? 1,
-          });
-        }
-
-        const child = spawnSync(binaryPath, {
-          input: stdin,
-          encoding: 'utf8',
-          timeout: compileTimeoutMs,
-          maxBuffer: 10 * 1024 * 1024,
-        });
-
-        resolve({
-          success: child.status === 0,
-          output: child.stdout || '',
-          error: child.stderr || undefined,
-          exitCode: child.status ?? 1,
-        });
+      {
+        cwd: tempDir,
+        env: sanitizeEnvironment(path.dirname(compilerCommand)),
+        timeout: compileTimeoutMs,
+        stdio: ['ignore', 'pipe', 'pipe'],
       }
     );
+
+    let compileStdout = '';
+    let compileStderr = '';
+
+    compiler.stdout.on('data', (chunk) => {
+      compileStdout += chunk.toString();
+    });
+
+    compiler.stderr.on('data', (chunk) => {
+      compileStderr += chunk.toString();
+    });
+
+    compiler.on('error', (error) => {
+      removeDirectory(tempDir);
+      resolve({
+        success: false,
+        output: compileStdout,
+        error: compileStderr || error.message,
+        exitCode: 1,
+      });
+    });
+
+    compiler.on('close', (code) => {
+      if (code !== 0) {
+        removeDirectory(tempDir);
+        return resolve({
+          success: false,
+          output: compileStdout,
+          error: compileStderr || 'Compilation failed.',
+          exitCode: code ?? 1,
+        });
+      }
+
+      const child = spawn(binaryPath, {
+        cwd: tempDir,
+        env: sanitizeEnvironment(path.dirname(binaryPath)),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      });
+
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => {
+        terminateProcessTree(child);
+        removeDirectory(tempDir);
+        resolve({
+          success: false,
+          output: stdout,
+          error: 'Program execution timed out.',
+          exitCode: 124,
+        });
+      }, compileTimeoutMs);
+
+      child.stdin.write(stdin);
+      child.stdin.end();
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        removeDirectory(tempDir);
+        resolve({
+          success: false,
+          output: stdout,
+          error: error.message,
+          exitCode: 1,
+        });
+      });
+
+      child.on('close', (exitCode) => {
+        clearTimeout(timer);
+        removeDirectory(tempDir);
+        resolve({
+          success: exitCode === 0,
+          output: stdout,
+          error: stderr || undefined,
+          exitCode: exitCode ?? 1,
+        });
+      });
+    });
   });
 }
+
+async function executeNativeC(request) {
+  const language = typeof request?.language === 'string' ? request.language : 'c';
+  const source = typeof request?.source === 'string' ? request.source : '';
+  const stdin = typeof request?.stdin === 'string' ? request.stdin : '';
+  const timeoutMs = Number(request?.timeoutMs ?? 10000);
+  const requestId = typeof request?.requestId === 'string' ? request.requestId : `native-${Date.now()}`;
+
+  if (language !== 'c') {
+    return {
+      success: false,
+      phase: 'validation',
+      requestId,
+      error: {
+        code: 'UNSUPPORTED_LANGUAGE',
+        message: 'Only C is supported in the native execution service during Stage 1.',
+      },
+      exitCode: 1,
+    };
+  }
+
+  if (!source.trim()) {
+    return {
+      success: false,
+      phase: 'validation',
+      requestId,
+      error: {
+        code: 'EMPTY_SOURCE',
+        message: 'Source code is required for native execution.',
+      },
+      exitCode: 1,
+    };
+  }
+
+  const runtime = detectGcc();
+  if (!runtime.available) {
+    return {
+      success: false,
+      phase: 'runtime-discovery',
+      requestId,
+      error: {
+        code: 'RUNTIME_MISSING',
+        message: runtime.message,
+      },
+      exitCode: 127,
+      runtime,
+    };
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forgebyte-run-'));
+  const sourcePath = path.join(tempDir, 'main.c');
+  const binaryPath = path.join(tempDir, getBinaryName());
+
+  try {
+    fs.writeFileSync(sourcePath, source, 'utf8');
+
+    const compilerCommand = runtime.path && String(runtime.path).trim() ? String(runtime.path) : 'gcc';
+    const compileResult = await new Promise((resolve, reject) => {
+      const compiler = spawn(
+        compilerCommand,
+        ['-std=c17', '-O2', '-static', '-o', binaryPath, sourcePath],
+        {
+          cwd: tempDir,
+          env: sanitizeEnvironment(path.dirname(compilerCommand)),
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: process.platform !== 'win32',
+        }
+      );
+
+      let stdout = '';
+      let stderr = '';
+
+      compiler.stdout.on('data', (chunk) => {
+        stdout += chunk.toString();
+      });
+
+      compiler.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      compiler.on('error', (error) => {
+        reject(error);
+      });
+
+      compiler.on('close', (exitCode) => {
+        if (exitCode !== 0) {
+          resolve({
+            ok: false,
+            stdout,
+            stderr,
+            exitCode: exitCode ?? 1,
+          });
+          return;
+        }
+
+        resolve({
+          ok: true,
+          stdout,
+          stderr,
+          exitCode: 0,
+        });
+      });
+    });
+
+    if (!compileResult.ok) {
+      await removeDirectory(tempDir);
+      return {
+        success: false,
+        phase: 'compile',
+        requestId,
+        stdout: compileResult.stdout,
+        stderr: compileResult.stderr,
+        error: {
+          code: 'COMPILATION_ERROR',
+          message: compileResult.stderr || 'The C compiler reported an error.',
+        },
+        exitCode: compileResult.exitCode,
+        runtime,
+      };
+    }
+
+    const actualTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10000;
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let program;
+
+    const settleExecution = async (result) => {
+      clearTimeout(timeoutHandle);
+      await removeDirectory(tempDir);
+      return result;
+    };
+
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      if (program) {
+        terminateProcessTree(program);
+      }
+    }, actualTimeoutMs);
+
+    try {
+      program = await spawnNativeProgram(binaryPath, [], {
+        cwd: tempDir,
+        env: sanitizeEnvironment(path.dirname(runtime.path)),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+        windowsHide: true,
+      });
+    } catch (error) {
+      return await settleExecution({
+        success: false,
+        phase: 'execution',
+        requestId,
+        stdout,
+        stderr,
+        error: {
+          code: 'EXECUTION_ERROR',
+          message: error instanceof Error ? error.message : String(error),
+        },
+        exitCode: 1,
+        runtime,
+      });
+    }
+
+    let processError = null;
+    program.on('error', (error) => {
+      processError = error;
+    });
+    program.stdin.on('error', (error) => {
+      processError = error;
+    });
+
+    program.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    program.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    if (stdin && program.stdin && !program.stdin.destroyed) {
+      try {
+        program.stdin.write(stdin);
+      } catch (error) {
+        // Ignore write errors when the child exits immediately after startup.
+      }
+    }
+
+    if (program.stdin && !program.stdin.destroyed) {
+      try {
+        program.stdin.end();
+      } catch {
+        // Ignore close errors if the child already exited.
+      }
+    }
+
+    const exitCode = await new Promise((resolve) => {
+      let settled = false;
+
+      const finalize = (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(code ?? 1);
+      };
+
+      program.on('close', (code) => {
+        finalize(code ?? 1);
+      });
+    });
+
+    if (timedOut) {
+      return await settleExecution({
+        success: false,
+        phase: 'execution',
+        requestId,
+        stdout,
+        stderr,
+        error: {
+          code: 'TIMEOUT',
+          message: `Program execution timed out after ${actualTimeoutMs}ms.`,
+        },
+        exitCode: 124,
+        runtime,
+      });
+    }
+
+    if (processError) {
+      return await settleExecution({
+        success: false,
+        phase: 'execution',
+        requestId,
+        stdout,
+        stderr,
+        error: {
+          code: 'EXECUTION_ERROR',
+          message: processError instanceof Error ? processError.message : String(processError),
+        },
+        exitCode: 1,
+        runtime,
+      });
+    }
+
+    return await settleExecution({
+      success: exitCode === 0,
+      phase: 'execution',
+      requestId,
+      stdout,
+      stderr,
+      error: exitCode === 0 ? null : {
+        code: 'RUNTIME_ERROR',
+        message: stderr || 'The program exited with a non-zero status.',
+      },
+      exitCode,
+      runtime,
+    });
+  } catch (error) {
+    await removeDirectory(tempDir);
+    return {
+      success: false,
+      phase: 'execution',
+      requestId,
+      error: {
+        code: 'EXECUTION_ERROR',
+        message: error instanceof Error ? error.message : String(error),
+      },
+      exitCode: 1,
+    };
+  }
+}
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, status: 'healthy' });
+});
+
+app.get('/api/runtime', (_req, res) => {
+  const runtime = detectGcc();
+  res.json(runtime);
+});
 
 app.post('/api/compile', async (req, res) => {
   const code = typeof req.body?.code === 'string' ? req.body.code : '';
@@ -95,9 +632,34 @@ app.post('/api/compile', async (req, res) => {
   }
 });
 
-const gccCheck = spawnSync('gcc', ['--version'], { encoding: 'utf8', timeout: 5000 });
-if (gccCheck.error) {
-  console.warn('gcc not found in PATH; Render or Docker runtime must install build-essential/gcc before using /api/compile');
+app.post('/api/execute', async (req, res) => {
+  const payload = req.body ?? {};
+  const result = await executeNativeC(payload);
+
+  if (result.success) {
+    return res.json(result);
+  }
+
+  if (result.phase === 'runtime-discovery' || result.error?.code === 'RUNTIME_MISSING') {
+    return res.status(503).json(result);
+  }
+
+  if (result.phase === 'validation') {
+    return res.status(400).json(result);
+  }
+
+  if (result.phase === 'compile') {
+    return res.status(400).json(result);
+  }
+
+  return res.status(500).json(result);
+});
+
+const gccCheck = detectGcc();
+if (!gccCheck.available) {
+  console.warn(gccCheck.message);
+} else {
+  console.log(`Native C runtime detected: ${gccCheck.executable} @ ${gccCheck.path || 'PATH'}`);
 }
 
 app.listen(PORT, () => {

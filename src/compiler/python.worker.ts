@@ -6,27 +6,57 @@ import type {
   RuntimeRequest,
 } from './execution-protocol';
 
-// Load Pyodide from the CDN. This worker is an ES module worker, so
-// importScripts is unavailable and we import the ESM entry via a dynamic
-// import. Vite leaves absolute cross-origin URLs as native imports (no
-// dev-server rewrite), and the relative assets inside pyodide.mjs resolve
-// against the same CDN path via indexURL.
-const PYODIDE_BASE = 'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/';
+// Load the Pyodide assets served from public/pyodide.
+const PYODIDE_BASE = '/pyodide/';
 
 type LoadPyodideFn = typeof import('pyodide').loadPyodide;
+type PyodideRuntime = Awaited<ReturnType<LoadPyodideFn>>;
 
 let loadPyodideFunc: LoadPyodideFn | null = null;
+let pyodideRuntimePromise: Promise<PyodideRuntime> | null = null;
 
 const getLoadPyodide = async (): Promise<LoadPyodideFn> => {
   if (loadPyodideFunc) return loadPyodideFunc;
 
-  const pyodideUrl = `${PYODIDE_BASE}pyodide.mjs`;
-  const pyodideModule = (await import(
-    /* @vite-ignore */ pyodideUrl
-  )) as { loadPyodide: LoadPyodideFn };
+  const response = await fetch(`${PYODIDE_BASE}pyodide.mjs`);
+  if (!response.ok) {
+    throw new Error(`Unable to load local Pyodide (${response.status})`);
+  }
+
+  const pyodideUrl = URL.createObjectURL(
+    new Blob([await response.text()], { type: 'text/javascript' })
+  );
+
+  let pyodideModule: { loadPyodide: LoadPyodideFn };
+  try {
+    pyodideModule = (await import(
+      /* @vite-ignore */ pyodideUrl
+    )) as { loadPyodide: LoadPyodideFn };
+  } finally {
+    URL.revokeObjectURL(pyodideUrl);
+  }
 
   loadPyodideFunc = pyodideModule.loadPyodide;
   return loadPyodideFunc;
+};
+
+const getPyodideRuntime = async (): Promise<PyodideRuntime> => {
+  if (!pyodideRuntimePromise) {
+    // Cache the initialized runtime so repeated runs reuse the same Pyodide
+    // instance after the local asset bundle has been loaded.
+    pyodideRuntimePromise = (async () => {
+      const loadFn = await getLoadPyodide();
+
+      return loadFn({
+        indexURL: PYODIDE_BASE,
+      });
+    })().catch((error) => {
+      pyodideRuntimePromise = null;
+      throw error;
+    });
+  }
+
+  return pyodideRuntimePromise;
 };
 
 const STDIN_REQUIRED_MARKER = '__FORGEBYTEX_STDIN_REQUIRED__';
@@ -42,7 +72,6 @@ type Session = {
   code: string;
   stdin: string;
   attempt: number;
-  pyodide: Awaited<ReturnType<LoadPyodideFn>> | null;
 };
 
 const executionSessions = new Map<string, Session>();
@@ -89,35 +118,32 @@ async function runPython(
   };
 
   try {
-    // Initialize Pyodide on first run per session
-    if (!session.pyodide) {
+    if (!pyodideRuntimePromise) {
       post({
         type: 'status',
         requestId,
         status: 'preparing',
         attempt,
       });
+    }
 
-      try {
-        const loadFn = await getLoadPyodide();
-        session.pyodide = await loadFn({
-          indexURL: PYODIDE_BASE,
-        });
-      } catch (loadError) {
-        const errorMsg = loadError instanceof Error ? loadError.message : String(loadError);
-        emit('stderr', `Failed to load Pyodide: ${errorMsg}\n`);
-        throw loadError;
-      }
+    let pyodide: PyodideRuntime;
+    try {
+      pyodide = await getPyodideRuntime();
+    } catch (loadError) {
+      const errorMsg = loadError instanceof Error ? loadError.message : String(loadError);
+      emit('stderr', `Failed to load Pyodide: ${errorMsg}\n`);
+      throw loadError;
     }
 
     // Configure streams for this attempt so emit closure captures current attempt
-    session.pyodide.setStdout({
+    pyodide.setStdout({
       batched: (s: string) => {
         emit('stdout', s);
       },
     });
 
-    session.pyodide.setStderr({
+    pyodide.setStderr({
       batched: (s: string) => {
         // Drop the traceback line produced when the stdin handler
         // suspends for more input; it is not a real error.
@@ -128,24 +154,11 @@ async function runPython(
       },
     });
 
-    // Clean Pyodide global namespace to ensure pure re-execution
-    try {
-      session.pyodide.runPython(`
-import sys
-main_dict = sys.modules['__main__'].__dict__
-for k in list(main_dict.keys()):
-    if not k.startswith('__'):
-        del main_dict[k]
-`);
-    } catch {
-      // Ignore namespace cleanup errors
-    }
-
     // Live stdin: read lines from session.stdin buffer starting at offset 0 for this attempt.
     let stdinOffset = 0;
     let wasStdinRequired = false;
 
-    session.pyodide.setStdin({
+    pyodide.setStdin({
       stdin: () => {
         if (stdinOffset < session.stdin.length) {
           const nl = session.stdin.indexOf('\n', stdinOffset);
@@ -172,9 +185,15 @@ for k in list(main_dict.keys()):
 
     // Run the Python code
     let output = '';
+    // Each attempt gets a fresh globals table so imports and variables from
+    // prior runs do not leak into the next execution.
+    const globals = pyodide.toPy({});
 
     try {
-      const result = await session.pyodide.runPythonAsync(code);
+      const result = await pyodide.runPythonAsync(code, {
+        globals,
+        locals: globals,
+      });
       
       // Convert result to string if it's not None
       if (result !== undefined && result !== null) {
@@ -205,6 +224,8 @@ for k in list(main_dict.keys()):
         errorMessage.includes(STDIN_REQUIRED_MARKER) ||
         errorMessage.includes('Errno 29')
       ) {
+        // Pyodide cannot suspend the same stack frame at input(); the run is
+        // replayed from scratch with the accumulated stdin buffer instead.
         return {
           success: false,
           output: '',
@@ -238,6 +259,12 @@ for k in list(main_dict.keys()):
         status: 'failed',
         phase: 'run',
       };
+    } finally {
+      try {
+        globals.destroy();
+      } catch {
+        // Ignore proxy cleanup errors.
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -365,7 +392,6 @@ self.addEventListener(
       code: data.code,
       stdin: data.stdin ?? '',
       attempt: 1,
-      pyodide: null,
     };
 
     executionSessions.set(data.requestId, session);

@@ -5,6 +5,11 @@ export type {
   ExecutionResult,
 } from './execution-protocol';
 
+import type {
+  ExecutionResult,
+  RunHooks,
+} from './execution-protocol';
+
 export type CompileRequest = {
   type: 'compile';
   requestId: string;
@@ -28,6 +33,7 @@ export type WorkerInputRequest = {
  */
 class CompilerClientFacade {
   private readonly inner: ExecutionClient;
+  private readonly backendUrl = import.meta.env.VITE_BACKEND_URL?.trim();
 
   constructor() {
     this.inner = new ExecutionClient(
@@ -39,9 +45,66 @@ class CompilerClientFacade {
   compile(
     code: string,
     stdin = '',
-    hooks = {}
+    hooks: RunHooks = {}
   ) {
-    return this.inner.compile(code, stdin, hooks);
+    if (!this.backendUrl) {
+      return this.inner.compile(code, stdin, hooks);
+    }
+
+    return this.compileWithBackend(code, stdin, hooks);
+  }
+
+  private async compileWithBackend(
+    code: string,
+    stdin: string,
+    hooks: RunHooks
+  ): Promise<ExecutionResult> {
+    hooks.onStatus?.('compiling');
+
+    try {
+      const response = await fetch(`${this.backendUrl}/api/compile`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          code,
+          stdin,
+        }),
+      });
+
+      const result = await response.json() as {
+        success?: boolean;
+        output?: string;
+        error?: string;
+        exitCode?: number | null;
+      };
+
+      hooks.onStatus?.('running');
+
+      if (result.output) {
+        hooks.onOutput?.('stdout', result.output, 1);
+      }
+
+      const status = result.success ? 'completed' : 'failed';
+      hooks.onStatus?.(status);
+
+      return {
+        success: Boolean(result.success),
+        output: result.output ?? '',
+        error: result.error,
+        exitCode: result.exitCode ?? null,
+        waitingForInput: false,
+        status,
+        phase: result.success ? 'run' : 'compile',
+      };
+    } catch {
+      /*
+       * Keep the existing browser compiler as the resilience path when
+       * a configured backend is unreachable in local/dev environments.
+       */
+      return this.inner.compile(code, stdin, hooks);
+    }
   }
 
   sendInput(input: string): boolean {

@@ -6,7 +6,9 @@
   "author": "TAKSYA STUDIO",
   "description": "ForgeByteX - Professional Code Editor by TAKSYA STUDIO",
   "scripts": {
+    "predev": "node scripts/copy-monaco.mjs && node scripts/copy-pyodide.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-monaco.mjs && node scripts/copy-pyodide.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

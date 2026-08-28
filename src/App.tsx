@@ -511,6 +511,7 @@ export const App: React.FC = () => {
       }
       setIsRunning(false);
       setExecutionStatus('stopped');
+      clearTransientInput();
       setTerminalLogs((prev) => [
         ...prev,
         '> Execution stopped.',
@@ -521,6 +522,13 @@ export const App: React.FC = () => {
     setIsRunning(true);
     setExecutionStatus('compiling');
     clearErrorState();
+
+    // Clear transient stdin state before each run so queued input from one
+    // execution cannot leak into the next language or retry.
+    function clearTransientInput() {
+      setQueuedInput('');
+      setTerminalInput('');
+    }
 
     // ── HTML preview path ─────────────────────────────────────
     if (activeLanguage === 'html' || activeFile.language === 'html' || activeFile.language === 'css' || activeFile.language === 'javascript') {
@@ -556,6 +564,7 @@ export const App: React.FC = () => {
           .map((input) => input.value)
           .join('\n')
       ).trim();
+      clearTransientInput();
 
       let baseLogLength = 0;
       let highestAttempt = 1;
@@ -602,6 +611,7 @@ export const App: React.FC = () => {
 
           setExecutionStatus(finalStatus);
           setIsRunning(false);
+          clearTransientInput();
 
           // ── Show compilation errors ───────────────────────
           if (!result.success) {
@@ -674,6 +684,7 @@ export const App: React.FC = () => {
         .catch((err: unknown) => {
           setExecutionStatus('failed');
           setIsRunning(false);
+          clearTransientInput();
           const message = err instanceof Error ? err.message : String(err);
           setTerminalLogs((prev) => [
             ...prev,
@@ -692,6 +703,7 @@ export const App: React.FC = () => {
           .map((input) => input.value)
           .join('\n')
       ).trim();
+      clearTransientInput();
 
       let baseLogLength = 0;
       let highestAttempt = 1;
@@ -738,6 +750,7 @@ export const App: React.FC = () => {
 
           setExecutionStatus(finalStatus);
           setIsRunning(false);
+          clearTransientInput();
 
           // ── Show Python errors ─────────────────────────────
           if (!result.success) {
@@ -769,6 +782,7 @@ export const App: React.FC = () => {
         .catch((err: unknown) => {
           setExecutionStatus('failed');
           setIsRunning(false);
+          clearTransientInput();
           const message = err instanceof Error ? err.message : String(err);
           setTerminalLogs((prev) => [
             ...prev,
@@ -790,6 +804,7 @@ export const App: React.FC = () => {
     activeLanguage,
     clearErrorState,
     isRunning,
+    files,
     programInputs,
     queuedInput,
     terminalInput,
@@ -1139,10 +1154,13 @@ export const App: React.FC = () => {
                 terminalLogs={terminalLogs}
                 htmlPreviewDoc={htmlPreviewDoc}
                 onSendInput={(input) => {
+                  // Normalize the line for the runtime while preserving the
+                  // typed value in the UI state.
+                  const stdinLine = input.endsWith('\n') ? input : `${input}\n`;
                   if (activeLanguage === 'c') {
-                    compilerClient.sendInput(input);
+                    compilerClient.sendInput(stdinLine);
                   } else if (activeLanguage === 'python') {
-                    pythonClient.sendInput(input);
+                    pythonClient.sendInput(stdinLine);
                   }
                   setQueuedInput((previous) => {
                     const next = previous ? `${previous}\n${input}` : input;
@@ -1223,10 +1241,13 @@ export const App: React.FC = () => {
                 terminalLogs={terminalLogs}
                 htmlPreviewDoc={htmlPreviewDoc}
                 onSendInput={(input) => {
+                  // Normalize the line for the runtime while preserving the
+                  // typed value in the UI state.
+                  const stdinLine = input.endsWith('\n') ? input : `${input}\n`;
                   if (activeLanguage === 'c') {
-                    compilerClient.sendInput(input);
+                    compilerClient.sendInput(stdinLine);
                   } else if (activeLanguage === 'python') {
-                    pythonClient.sendInput(input);
+                    pythonClient.sendInput(stdinLine);
                   }
                   setQueuedInput((previous) => {
                     const next = previous ? `${previous}\n${input}` : input;

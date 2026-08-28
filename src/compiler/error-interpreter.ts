@@ -75,7 +75,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     create: (match, raw) => ({
       title: "👀 Bro… who is this variable?",
       message:
-        `\`${match[4].trim()}\` is being used, but C doesn't know what it is.`,
+        `\`${match[3].trim()}\` is being used, but C doesn't know what it is.`,
       tip:
         "Declare the variable before using it and check that its spelling matches exactly.",
       line: Number(match[1]),
@@ -109,7 +109,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     create: (match, raw) => ({
       title: "🤔 That name hasn't been introduced yet.",
       message:
-        `\`${match[4].trim()}\` appears to be undeclared.`,
+        `\`${match[3].trim()}\` appears to be undeclared.`,
       tip:
         "Declare it before using it, or check whether you made a spelling mistake.",
       line: Number(match[1]),
@@ -125,7 +125,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
 
     create: (match, raw) => ({
       title: "⚠️ Not broken… but C is giving you a warning.",
-      message: match[4].trim(),
+      message: match[3].trim(),
       tip:
         "Read the warning carefully. Your program may compile, but something could still be wrong.",
       line: Number(match[1]),
@@ -141,7 +141,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
 
     create: (match, raw) => ({
       title: "💥 Yep… C found something it doesn't like.",
-      message: match[4].trim(),
+      message: match[3].trim(),
       tip:
         "Check this line first. The actual mistake can sometimes be a few characters before the highlighted position.",
       line: Number(match[1]),

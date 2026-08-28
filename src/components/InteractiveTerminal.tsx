@@ -70,6 +70,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   const terminalRef = useRef<Terminal | null>(null);
   const inputBufferRef = useRef('');
   const onInputRef = useRef(onInput);
+  const themeRef = useRef(theme);
   /** How many log entries the terminal has already written. */
   const prevLengthRef = useRef(0);
   /** The clearGeneration that was last acted upon. */
@@ -78,6 +79,10 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
   useEffect(() => {
     onInputRef.current = onInput;
   }, [onInput]);
+
+  useEffect(() => {
+    themeRef.current = theme;
+  }, [theme]);
 
   // ── Mount the xterm Terminal once ────────────────────────────────────────
   useEffect(() => {
@@ -92,7 +97,7 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
       fontSize: 13,
       lineHeight: 1.4,
-      theme: XTERM_THEMES[theme] ?? XTERM_THEMES.black,
+      theme: XTERM_THEMES[themeRef.current] ?? XTERM_THEMES.black,
       scrollback: 5000,
     });
 

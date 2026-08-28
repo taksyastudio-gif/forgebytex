@@ -33,6 +33,7 @@ export class ExecutionClient {
   private readonly workerUrl: URL;
   private readonly workerOptions: WorkerOptions;
 
+  private worker: Worker | null = null;
   private pendingRequests = new Map<string, PendingRequest>();
   private watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private activeRequestId: string | null = null;
@@ -57,6 +58,30 @@ export class ExecutionClient {
     worker.addEventListener('messageerror', this.handleMessageError);
 
     return worker;
+  }
+
+  private ensureWorker(): Worker {
+    if (!this.worker) {
+      // Reuse the same worker so a suspended run can resume against the
+      // already-loaded runtime instead of paying startup cost again.
+      this.worker = this.createWorker();
+    }
+
+    return this.worker;
+  }
+
+  private disposeWorker(): void {
+    if (!this.worker) {
+      return;
+    }
+
+    try {
+      this.worker.terminate();
+    } catch {
+      // Ignore worker teardown errors.
+    }
+
+    this.worker = null;
   }
 
   /* ============================================================
@@ -88,13 +113,20 @@ export class ExecutionClient {
     }
 
     this.teardownRequest(requestId);
+    // A timed-out worker may be left mid-execution; terminate it so the next
+    // run starts from a clean runtime.
+    this.disposeWorker();
 
     pending.hooks.onStatus?.('timeout');
-    pending.reject(
-      new Error(
-        'Execution timed out after 30 seconds without activity.'
-      )
-    );
+    pending.resolve({
+      success: false,
+      output: '',
+      error: 'Execution timed out after 30 seconds without activity.',
+      exitCode: null,
+      waitingForInput: false,
+      status: 'timeout',
+      phase: 'run',
+    });
   }
 
   /**
@@ -112,12 +144,6 @@ export class ExecutionClient {
 
     if (this.activeRequestId === requestId) {
       this.activeRequestId = null;
-    }
-
-    try {
-      pending.worker.terminate();
-    } catch {
-      // Ignore worker teardown errors.
     }
   }
 
@@ -229,18 +255,15 @@ export class ExecutionClient {
     for (const [requestId, pending] of this.pendingRequests) {
       this.disarmWatchdog(requestId);
 
-      try {
-        pending.worker.terminate();
-      } catch {
-        // Ignore worker teardown errors.
-      }
-
       pending.reject(error);
     }
 
     this.pendingRequests.clear();
     this.watchdogs.clear();
     this.activeRequestId = null;
+    // Stop or fatal worker failures always tear down the reused worker so
+    // stale state cannot bleed into the next execution.
+    this.disposeWorker();
   }
 
   /* ============================================================
@@ -264,7 +287,7 @@ export class ExecutionClient {
       );
     }
 
-    const worker = this.createWorker();
+    const worker = this.ensureWorker();
 
     const requestId = `${Date.now()}-${Math.random()
       .toString(36)
@@ -338,6 +361,9 @@ export class ExecutionClient {
 
     if (pending) {
       this.teardownRequest(requestId);
+      // Stop is a hard reset: drop the worker and settle the run so the UI
+      // can clear transient stdin and start cleanly on the next run.
+      this.disposeWorker();
 
       pending.hooks.onStatus?.('stopped');
       pending.resolve({
@@ -361,17 +387,12 @@ export class ExecutionClient {
   terminate(): void {
     for (const requestId of this.pendingRequests.keys()) {
       this.disarmWatchdog(requestId);
-      const pending = this.pendingRequests.get(requestId);
-
-      try {
-        pending?.worker.terminate();
-      } catch {
-        // Ignore worker teardown errors.
-      }
     }
 
     this.pendingRequests.clear();
     this.watchdogs.clear();
     this.activeRequestId = null;
+    // Release the reused worker when the client is being torn down.
+    this.disposeWorker();
   }
 }

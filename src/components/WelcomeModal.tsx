@@ -72,6 +72,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) =
   );
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const shouldShowWelcome = (): boolean => {
   if (typeof window === 'undefined') return false;
   return !localStorage.getItem(WELCOME_DISMISSED_KEY);
