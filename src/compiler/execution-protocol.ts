@@ -34,6 +34,7 @@ export type RuntimeRequest =
       requestId: string;
       code: string;
       stdin?: string;
+      stdinBuffer?: SharedArrayBuffer;
     }
   | {
       type: 'stdin';

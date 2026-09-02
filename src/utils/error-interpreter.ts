@@ -8,6 +8,72 @@ export interface FriendlyError {
   severity: 'error' | 'warning';
 }
 
+const PYTHON_ERROR_TYPES = [
+  'SyntaxError',
+  'NameError',
+  'TypeError',
+  'IndentationError',
+  'IndexError',
+  'KeyError',
+  'ZeroDivisionError',
+  'ModuleNotFoundError',
+] as const;
+
+type PythonErrorType = (typeof PYTHON_ERROR_TYPES)[number];
+
+const pythonExplanation = (type: PythonErrorType): string => {
+  switch (type) {
+    case 'SyntaxError':
+      return 'Python could not parse this code. Check the highlighted line for missing punctuation, quotes, or an invalid statement.';
+    case 'IndentationError':
+      return 'Python uses indentation to define blocks. Make the indentation consistent with the surrounding code.';
+    case 'NameError':
+      return 'This name has not been defined yet, or its spelling does not match the definition.';
+    case 'TypeError':
+      return 'This operation or function call uses a value of the wrong type. Check the values and expected argument types.';
+    case 'IndexError':
+      return 'The code tried to access a list or sequence position that does not exist.';
+    case 'KeyError':
+      return 'The requested dictionary key does not exist. Check the key or use a safe lookup.';
+    case 'ZeroDivisionError':
+      return 'A number was divided by zero. Check the divisor before performing the calculation.';
+    case 'ModuleNotFoundError':
+      return 'Python could not find the requested module in the browser runtime. Check the module name and supported packages.';
+  }
+};
+
+export function interpretPythonError(rawOutput: string): FriendlyError[] {
+  const raw = rawOutput.trim();
+  if (!raw) return [];
+
+  const typeMatch = raw.match(
+    new RegExp(`\\b(${PYTHON_ERROR_TYPES.join('|')})\\b`)
+  );
+  const type = typeMatch?.[1] as PythonErrorType | undefined;
+  const locationMatches = [...raw.matchAll(/File ".*?", line (\d+)/g)];
+  const line = locationMatches.length > 0
+    ? Number(locationMatches[locationMatches.length - 1][1])
+    : 1;
+  const messageLine = raw.split(/\r?\n/).reverse().find((value) =>
+    value.trim().length > 0
+  ) ?? raw;
+  const message = type
+    ? messageLine.replace(new RegExp(`^${type}:\\s*`), '').trim() || type
+    : messageLine.trim();
+
+  return [{
+    id: 'python-err-0',
+    line,
+    column: 1,
+    message: type ? `${type}: ${message}` : message,
+    raw,
+    explanation: type
+      ? pythonExplanation(type)
+      : 'Python reported an execution error. Review the traceback and the highlighted line.',
+    severity: 'error',
+  }];
+}
+
 const formatMessage = (rawMessage: string): string => {
   const clean = (rawMessage || '').replace(/\s+/g, ' ').trim();
   if (!clean) {

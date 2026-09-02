@@ -67,6 +67,110 @@ async function removeDirectory(directoryPath) {
   }
 }
 
+async function buildNativeBinary(source, { staticLink = false } = {}) {
+  const gccCheck = detectGcc();
+  if (!gccCheck.available) {
+    return {
+      success: false,
+      output: '',
+      error: gccCheck.message,
+      exitCode: 127,
+      runtime: gccCheck,
+    };
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forgebyte-'));
+  const sourcePath = path.join(tempDir, 'main.c');
+  const binaryPath = path.join(tempDir, getBinaryName());
+
+  try {
+    fs.writeFileSync(sourcePath, source, 'utf8');
+  } catch (error) {
+    await removeDirectory(tempDir);
+    return {
+      success: false,
+      output: '',
+      error: error instanceof Error ? error.message : String(error),
+      exitCode: 1,
+      runtime: gccCheck,
+    };
+  }
+
+  const compileTimeoutMs = 15000;
+  const compilerCommand = gccCheck.path && gccCheck.path.trim() ? gccCheck.path : 'gcc';
+  const compiler = spawn(
+    compilerCommand,
+    [
+      '-std=c17',
+      '-O2',
+      ...(staticLink ? ['-static'] : []),
+      '-o',
+      binaryPath,
+      sourcePath,
+    ],
+    {
+      cwd: tempDir,
+      env: sanitizeEnvironment(path.dirname(compilerCommand)),
+      timeout: compileTimeoutMs,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    }
+  );
+
+  let compileStdout = '';
+  let compileStderr = '';
+
+  compiler.stdout.on('data', (chunk) => {
+    compileStdout += chunk.toString();
+  });
+
+  compiler.stderr.on('data', (chunk) => {
+    compileStderr += chunk.toString();
+  });
+
+  const result = await new Promise((resolve) => {
+    compiler.on('error', (error) => {
+      resolve({
+        success: false,
+        output: compileStdout,
+        error: compileStderr || error.message,
+        exitCode: 1,
+        runtime: gccCheck,
+      });
+    });
+
+    compiler.on('close', (code) => {
+      if (code !== 0) {
+        resolve({
+          success: false,
+          output: compileStdout,
+          error: compileStderr || 'Compilation failed.',
+          exitCode: code ?? 1,
+          runtime: gccCheck,
+        });
+        return;
+      }
+
+      resolve({
+        success: true,
+        output: compileStdout,
+        error: compileStderr || undefined,
+        exitCode: 0,
+        runtime: gccCheck,
+        tempDir,
+        sourcePath,
+        binaryPath,
+      });
+    });
+  });
+
+  if (!result.success) {
+    await removeDirectory(tempDir);
+  }
+
+  return result;
+}
+
 function spawnNativeProgram(command, args, options, attempt = 1) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, options);
@@ -88,6 +192,271 @@ function spawnNativeProgram(command, args, options, attempt = 1) {
       reject(error);
     });
   });
+}
+
+const interactiveSessions = new Map();
+
+function formatSseEvent(event, data) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function broadcastInteractiveEvent(session, event, data) {
+  const payload = formatSseEvent(event, data);
+  session.events.push(payload);
+
+  for (const res of session.listeners) {
+    res.write(payload);
+  }
+}
+
+async function cleanupInteractiveSession(sessionId) {
+  const session = interactiveSessions.get(sessionId);
+  if (!session) {
+    return;
+  }
+
+  interactiveSessions.delete(sessionId);
+
+  if (session.cleanupTimer) {
+    clearTimeout(session.cleanupTimer);
+    session.cleanupTimer = null;
+  }
+
+  for (const res of session.listeners) {
+    try {
+      res.end();
+    } catch {
+      // Ignore stale response teardown errors.
+    }
+  }
+
+  session.listeners.clear();
+
+  try {
+    terminateProcessTree(session.child);
+  } catch {
+    // Ignore cleanup failures.
+  }
+
+  await removeDirectory(session.tempDir);
+}
+
+function finalizeInteractiveSession(sessionId, result) {
+  const session = interactiveSessions.get(sessionId);
+  if (!session || session.finalized) {
+    return;
+  }
+
+  session.finalized = true;
+  broadcastInteractiveEvent(session, 'status', {
+    type: 'status',
+    requestId: session.requestId,
+    status: result.status,
+    attempt: 1,
+  });
+
+  broadcastInteractiveEvent(session, 'result', {
+    type: 'result',
+    requestId: session.requestId,
+    success: result.success,
+    output: result.output,
+    error: result.error,
+    warnings: result.warnings,
+    exitCode: result.exitCode ?? null,
+    waitingForInput: false,
+    status: result.status,
+    phase: result.phase ?? 'run',
+  });
+
+  if (!session.cleanupTimer) {
+    session.cleanupTimer = setTimeout(() => {
+      void cleanupInteractiveSession(sessionId);
+    }, 30000);
+  }
+}
+
+async function startInteractiveSession(request) {
+  const language = typeof request?.language === 'string' ? request.language : 'c';
+  const source = typeof request?.source === 'string' ? request.source : '';
+  const stdin = typeof request?.stdin === 'string' ? request.stdin : '';
+  const requestId = typeof request?.requestId === 'string' ? request.requestId : `interactive-${Date.now()}`;
+
+  if (language !== 'c') {
+    return {
+      success: false,
+      phase: 'validation',
+      requestId,
+      error: {
+        code: 'UNSUPPORTED_LANGUAGE',
+        message: 'Only C is supported for interactive native execution.',
+      },
+      exitCode: 1,
+    };
+  }
+
+  if (!source.trim()) {
+    return {
+      success: false,
+      phase: 'validation',
+      requestId,
+      error: {
+        code: 'EMPTY_SOURCE',
+        message: 'Source code is required for interactive execution.',
+      },
+      exitCode: 1,
+    };
+  }
+
+  const buildResult = await buildNativeBinary(source, { staticLink: true });
+  if (!buildResult.success) {
+    return {
+      success: false,
+      phase: 'compile',
+      requestId,
+      stdout: buildResult.output,
+      stderr: buildResult.error,
+      error: {
+        code: 'COMPILATION_ERROR',
+        message: buildResult.error || 'The C compiler reported an error.',
+      },
+      exitCode: buildResult.exitCode,
+      runtime: buildResult.runtime,
+    };
+  }
+
+  const tempDir = buildResult.tempDir;
+  const runtime = buildResult.runtime;
+
+  let child;
+  try {
+    child = await spawnNativeProgram(buildResult.binaryPath, [], {
+      cwd: tempDir,
+      env: sanitizeEnvironment(path.dirname(runtime.path)),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+    });
+  } catch (error) {
+    await removeDirectory(tempDir);
+    return {
+      success: false,
+      phase: 'execution',
+      requestId,
+      error: {
+        code: 'EXECUTION_ERROR',
+        message: error instanceof Error ? error.message : String(error),
+      },
+      exitCode: 1,
+      runtime,
+    };
+  }
+
+  const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const session = {
+    sessionId,
+    requestId,
+    child,
+    tempDir,
+    runtime,
+    listeners: new Set(),
+    events: [],
+    finalized: false,
+    stdout: '',
+    stderr: '',
+    warnings: buildResult.error?.trim() || undefined,
+    manualStop: false,
+    cleanupTimer: null,
+  };
+
+  interactiveSessions.set(sessionId, session);
+
+  child.stdout.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (!text) {
+      return;
+    }
+
+    session.stdout += text;
+    broadcastInteractiveEvent(session, 'stream', {
+      type: 'stream',
+      requestId,
+      stream: 'stdout',
+      text,
+      attempt: 1,
+    });
+  });
+
+  child.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (!text) {
+      return;
+    }
+
+    session.stderr += text;
+    broadcastInteractiveEvent(session, 'stream', {
+      type: 'stream',
+      requestId,
+      stream: 'stderr',
+      text,
+      attempt: 1,
+    });
+  });
+
+  child.on('error', (error) => {
+    if (session.finalized) {
+      return;
+    }
+
+    finalizeInteractiveSession(sessionId, {
+      success: false,
+      output: session.stdout,
+      error: error.message,
+      exitCode: null,
+      status: 'failed',
+      phase: 'run',
+    });
+  });
+
+  child.on('close', (exitCode, signal) => {
+    if (session.finalized) {
+      return;
+    }
+
+    const stopped = session.manualStop || signal != null;
+    const success = !stopped && exitCode === 0;
+    const runtimeError = session.stderr.trim();
+    const status = stopped ? 'stopped' : (success ? 'completed' : 'failed');
+
+    finalizeInteractiveSession(sessionId, {
+      success,
+      output: session.stdout,
+      error: success
+        ? undefined
+        : (stopped
+          ? 'Execution stopped.'
+          : runtimeError || `Program exited with code ${exitCode ?? 1}.`),
+      warnings: session.warnings,
+      exitCode: stopped ? null : (exitCode ?? 1),
+      status,
+      phase: 'run',
+    });
+  });
+
+  if (stdin && child.stdin && !child.stdin.destroyed) {
+    try {
+      child.stdin.write(stdin);
+    } catch {
+      // Ignore startup write failures if the process exits immediately.
+    }
+  }
+
+  return {
+    success: true,
+    requestId,
+    sessionId,
+    phase: 'run',
+    runtime,
+  };
 }
 
 function detectGcc() {
@@ -195,128 +564,78 @@ function detectGcc() {
 }
 
 async function compileCSource(source, stdin = '') {
-  return new Promise((resolve) => {
-    const gccCheck = detectGcc();
-    if (!gccCheck.available) {
-      return resolve({
-        success: false,
-        output: '',
-        error: gccCheck.message,
-        exitCode: 127,
-      });
-    }
+  const buildResult = await buildNativeBinary(source, { staticLink: false });
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forgebyte-'));
-    const sourcePath = path.join(tempDir, 'main.c');
-    const binaryPath = path.join(tempDir, getBinaryName());
+  if (!buildResult.success) {
+    return {
+      success: false,
+      output: buildResult.output,
+      error: buildResult.error,
+      exitCode: buildResult.exitCode,
+    };
+  }
 
-    try {
-      fs.writeFileSync(sourcePath, source, 'utf8');
-    } catch (error) {
-      return resolve({
-        success: false,
-        output: '',
-        error: error instanceof Error ? error.message : String(error),
-        exitCode: 1,
-      });
-    }
+  const tempDir = buildResult.tempDir;
+  const child = spawn(buildResult.binaryPath, {
+    cwd: tempDir,
+    env: sanitizeEnvironment(path.dirname(buildResult.binaryPath)),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  });
 
-    const compileTimeoutMs = 15000;
-    const compilerCommand = gccCheck.path && gccCheck.path.trim() ? gccCheck.path : 'gcc';
-    const compiler = spawn(
-      compilerCommand,
-      ['-std=c17', '-O2', '-o', binaryPath, sourcePath],
-      {
-        cwd: tempDir,
-        env: sanitizeEnvironment(path.dirname(compilerCommand)),
-        timeout: compileTimeoutMs,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }
-    );
+  let stdout = '';
+  let stderr = '';
+  const compileTimeoutMs = 15000;
+  let settled = false;
 
-    let compileStdout = '';
-    let compileStderr = '';
-
-    compiler.stdout.on('data', (chunk) => {
-      compileStdout += chunk.toString();
-    });
-
-    compiler.stderr.on('data', (chunk) => {
-      compileStderr += chunk.toString();
-    });
-
-    compiler.on('error', (error) => {
-      removeDirectory(tempDir);
-      resolve({
-        success: false,
-        output: compileStdout,
-        error: compileStderr || error.message,
-        exitCode: 1,
-      });
-    });
-
-    compiler.on('close', (code) => {
-      if (code !== 0) {
-        removeDirectory(tempDir);
-        return resolve({
-          success: false,
-          output: compileStdout,
-          error: compileStderr || 'Compilation failed.',
-          exitCode: code ?? 1,
-        });
+  return await new Promise((resolve) => {
+    const settle = (result) => {
+      if (settled) {
+        return;
       }
 
-      const child = spawn(binaryPath, {
-        cwd: tempDir,
-        env: sanitizeEnvironment(path.dirname(binaryPath)),
-        stdio: ['pipe', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
+      settled = true;
+      clearTimeout(timer);
+      void removeDirectory(tempDir);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      terminateProcessTree(child);
+      settle({
+        success: false,
+        output: stdout,
+        error: 'Program execution timed out.',
+        exitCode: 124,
       });
+    }, compileTimeoutMs);
 
-      let stdout = '';
-      let stderr = '';
-      const timer = setTimeout(() => {
-        terminateProcessTree(child);
-        removeDirectory(tempDir);
-        resolve({
-          success: false,
-          output: stdout,
-          error: 'Program execution timed out.',
-          exitCode: 124,
-        });
-      }, compileTimeoutMs);
+    child.stdin.write(stdin);
+    child.stdin.end();
 
-      child.stdin.write(stdin);
-      child.stdin.end();
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
 
-      child.stdout.on('data', (chunk) => {
-        stdout += chunk.toString();
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', (error) => {
+      settle({
+        success: false,
+        output: stdout,
+        error: error.message,
+        exitCode: 1,
       });
+    });
 
-      child.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      child.on('error', (error) => {
-        clearTimeout(timer);
-        removeDirectory(tempDir);
-        resolve({
-          success: false,
-          output: stdout,
-          error: error.message,
-          exitCode: 1,
-        });
-      });
-
-      child.on('close', (exitCode) => {
-        clearTimeout(timer);
-        removeDirectory(tempDir);
-        resolve({
-          success: exitCode === 0,
-          output: stdout,
-          error: stderr || undefined,
-          exitCode: exitCode ?? 1,
-        });
+    child.on('close', (exitCode) => {
+      settle({
+        success: exitCode === 0,
+        output: stdout,
+        error: stderr || undefined,
+        exitCode: exitCode ?? 1,
       });
     });
   });
@@ -634,6 +953,28 @@ app.post('/api/compile', async (req, res) => {
 
 app.post('/api/execute', async (req, res) => {
   const payload = req.body ?? {};
+  if (payload?.interactive === true) {
+    const result = await startInteractiveSession(payload);
+
+    if (result.success) {
+      return res.status(202).json(result);
+    }
+
+    if (result.phase === 'runtime-discovery' || result.error?.code === 'RUNTIME_MISSING') {
+      return res.status(503).json(result);
+    }
+
+    if (result.phase === 'validation') {
+      return res.status(400).json(result);
+    }
+
+    if (result.phase === 'compile') {
+      return res.status(400).json(result);
+    }
+
+    return res.status(500).json(result);
+  }
+
   const result = await executeNativeC(payload);
 
   if (result.success) {
@@ -653,6 +994,99 @@ app.post('/api/execute', async (req, res) => {
   }
 
   return res.status(500).json(result);
+});
+
+app.get('/api/execute/:sessionId/events', (req, res) => {
+  const { sessionId } = req.params;
+  const session = interactiveSessions.get(sessionId);
+
+  if (!session) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'SESSION_NOT_FOUND',
+        message: 'Interactive execution session not found.',
+      },
+    });
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  session.listeners.add(res);
+
+  for (const event of session.events) {
+    res.write(event);
+  }
+
+  req.on('close', () => {
+    session.listeners.delete(res);
+  });
+});
+
+app.post('/api/execute/:sessionId/input', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = interactiveSessions.get(sessionId);
+
+  if (!session) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'SESSION_NOT_FOUND',
+        message: 'Interactive execution session not found.',
+      },
+    });
+  }
+
+  const input = typeof req.body?.input === 'string' ? req.body.input : '';
+  const eof = Boolean(req.body?.eof);
+
+  if (eof) {
+    try {
+      if (session.child.stdin && !session.child.stdin.destroyed) {
+        session.child.stdin.end();
+      }
+    } catch {
+      // Ignore close failures.
+    }
+  } else if (input && session.child.stdin && !session.child.stdin.destroyed) {
+    try {
+      session.child.stdin.write(input);
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'STDIN_WRITE_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  return res.json({ success: true });
+});
+
+app.post('/api/execute/:sessionId/stop', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = interactiveSessions.get(sessionId);
+
+  if (!session) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'SESSION_NOT_FOUND',
+        message: 'Interactive execution session not found.',
+      },
+    });
+  }
+
+  session.manualStop = true;
+  terminateProcessTree(session.child);
+
+  return res.json({ success: true });
 });
 
 const gccCheck = detectGcc();

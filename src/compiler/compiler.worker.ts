@@ -60,6 +60,38 @@ class InteractiveOpenFile extends OpenFile {
   }
 }
 
+class SharedStdinOpenFile extends OpenFile {
+  private readonly control: Int32Array;
+  private readonly data: Uint8Array;
+
+  constructor(sharedBuffer: SharedArrayBuffer) {
+    super(new File(new Uint8Array()));
+    this.control = new Int32Array(sharedBuffer, 0, 4);
+    this.data = new Uint8Array(sharedBuffer, 16);
+  }
+
+  fd_read(size: number): { ret: number; data: Uint8Array } {
+    while (true) {
+      const writeIndex = Atomics.load(this.control, 0);
+      const readIndex = Atomics.load(this.control, 1);
+
+      if (readIndex < writeIndex) {
+        const endIndex = Math.min(writeIndex, readIndex + size);
+        const slice = this.data.slice(readIndex, endIndex);
+        Atomics.store(this.control, 1, readIndex + slice.length);
+        return { ret: 0, data: slice };
+      }
+
+      if (Atomics.load(this.control, 2) === 1) {
+        return { ret: 0, data: new Uint8Array(0) };
+      }
+
+      const version = Atomics.load(this.control, 3);
+      Atomics.wait(this.control, 3, version);
+    }
+  }
+}
+
 type CompilerInstance = Awaited<ReturnType<typeof Clang>>;
 type LinkerInstance = Awaited<ReturnType<typeof LLD>>;
 
@@ -204,6 +236,7 @@ const createInvocation = async (
 async function compileAndRun(
   code: string,
   stdinText: string,
+  stdinBuffer: SharedArrayBuffer | null,
   requestId: string,
   attempt: number
 ): Promise<{
@@ -293,12 +326,19 @@ async function compileAndRun(
 
     const wasmModule = await WebAssembly.compile(executable);
 
-    const normalizedStdin = stdinText.length > 0 && !stdinText.endsWith('\n')
-      ? `${stdinText}\n`
-      : stdinText;
+    let stdinFd: OpenFile;
 
-    const stdinFile = new InteractiveStdinFile();
-    stdinFile.append(textEncoder.encode(normalizedStdin));
+    if (stdinBuffer) {
+      stdinFd = new SharedStdinOpenFile(stdinBuffer);
+    } else {
+      const stdinFile = new InteractiveStdinFile();
+      const normalizedStdin = stdinText.length > 0 && !stdinText.endsWith('\n')
+        ? `${stdinText}\n`
+        : stdinText;
+
+      stdinFile.append(textEncoder.encode(normalizedStdin));
+      stdinFd = new InteractiveOpenFile(stdinFile);
+    }
 
     const stdoutChunks: string[] = [];
     const stdoutDecoder = new TextDecoder('utf-8', { fatal: false });
@@ -321,7 +361,7 @@ async function compileAndRun(
     });
 
     const wasi = new WASI(['main'], [], [
-      new InteractiveOpenFile(stdinFile),
+      stdinFd,
       stdout,
       stderr,
     ]);
@@ -483,6 +523,7 @@ async function compileAndRun(
 type Session = {
   code: string;
   stdin: string;
+  stdinBuffer: SharedArrayBuffer | null;
   attempt: number;
 };
 
@@ -567,6 +608,7 @@ const runSession = async (
   const result = await compileAndRun(
     session.code,
     session.stdin,
+    session.stdinBuffer,
     requestId,
     attempt
   );
@@ -593,6 +635,12 @@ self.addEventListener(
       const session = executionSessions.get(data.requestId);
       if (!session) {
         // Unknown/expired session: stale message, drop it.
+        return;
+      }
+
+      if (session.stdinBuffer) {
+        // Shared-memory stdin is written directly from the client, so
+        // worker-side stdin messages are only used by the legacy fallback.
         return;
       }
 
@@ -639,6 +687,7 @@ self.addEventListener(
     const session: Session = {
       code: data.code,
       stdin: data.stdin ?? '',
+      stdinBuffer: data.stdinBuffer ?? null,
       attempt: 1,
     };
 

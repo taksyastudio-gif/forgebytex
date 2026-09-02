@@ -8,7 +8,10 @@ import React, {
 import { HeaderControls } from './components/HeaderControls';
 import { FileExplorer } from './components/FileExplorer';
 import { CodeEditor } from './components/CodeEditor';
-import { interpretCompilerOutput } from './utils/error-interpreter';
+import {
+  interpretCompilerOutput,
+  interpretPythonError,
+} from './utils/error-interpreter';
 import {
   applyMonacoMarkers,
   clearMonacoMarkers,
@@ -174,8 +177,7 @@ export const App: React.FC = () => {
    */
   const [clearGeneration, setClearGeneration] = useState(0);
 
-  const [queuedInput, setQueuedInput] = useState('');
-  const [terminalInput, setTerminalInput] = useState('');
+  const [queuedInput, setQueuedInput] = useState<string[]>([]);
   const [programInputs, setProgramInputs] =
     useState<ProgramInputItem[]>([]);
 
@@ -210,6 +212,7 @@ export const App: React.FC = () => {
     useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(
       null
     );
+  const executionGenerationRef = useRef(0);
 
   const handleEditorMount = useCallback(
     (
@@ -504,6 +507,7 @@ export const App: React.FC = () => {
 
     // ── Stop a running execution ──────────────────────────────
     if (isRunning) {
+      executionGenerationRef.current += 1;
       if (activeLanguage === 'c') {
         compilerClient.stopCurrent();
       } else if (activeLanguage === 'python') {
@@ -522,12 +526,14 @@ export const App: React.FC = () => {
     setIsRunning(true);
     setExecutionStatus('compiling');
     clearErrorState();
+    const executionGeneration = ++executionGenerationRef.current;
+    const isCurrentExecution = () =>
+      executionGenerationRef.current === executionGeneration;
 
     // Clear transient stdin state before each run so queued input from one
     // execution cannot leak into the next language or retry.
     function clearTransientInput() {
-      setQueuedInput('');
-      setTerminalInput('');
+      setQueuedInput([]);
     }
 
     // ── HTML preview path ─────────────────────────────────────
@@ -557,13 +563,10 @@ export const App: React.FC = () => {
 
     // ── C compilation path ────────────────────────────────────
     if (activeLanguage === 'c') {
-      const stdin = (
-        terminalInput ||
-        queuedInput ||
-        programInputs
-          .map((input) => input.value)
-          .join('\n')
-      ).trim();
+      const stdin = [
+        ...programInputs.map((input) => input.value),
+        ...queuedInput,
+      ].join('\n');
       clearTransientInput();
 
       let baseLogLength = 0;
@@ -582,6 +585,7 @@ export const App: React.FC = () => {
           stdin,
           // ── Streaming stdout/stderr callback ──────────────
           { onOutput: (_stream: 'stdout' | 'stderr', text: string, attempt = 1) => {
+            if (!isCurrentExecution()) return;
             if (!text) return;
             setTerminalLogs((prev) => {
               if (attempt > highestAttempt) {
@@ -593,6 +597,7 @@ export const App: React.FC = () => {
           },
           // ── Status update callback ────────────────────────
           onStatus: (status: ExecutionStatus) => {
+            if (!isCurrentExecution()) return;
             setExecutionStatus(status);
             if (
               status === 'completed' ||
@@ -605,6 +610,7 @@ export const App: React.FC = () => {
           }}
         )
         .then((result) => {
+          if (!isCurrentExecution()) return;
           const finalStatus =
             result.status ??
             (result.success ? 'completed' : 'failed');
@@ -682,6 +688,7 @@ export const App: React.FC = () => {
           }
         })
         .catch((err: unknown) => {
+          if (!isCurrentExecution()) return;
           setExecutionStatus('failed');
           setIsRunning(false);
           clearTransientInput();
@@ -696,13 +703,10 @@ export const App: React.FC = () => {
 
     // ── Python execution path ─────────────────────────────────
     if (activeLanguage === 'python') {
-      const stdin = (
-        terminalInput ||
-        queuedInput ||
-        programInputs
-          .map((input) => input.value)
-          .join('\n')
-      ).trim();
+      const stdin = [
+        ...programInputs.map((input) => input.value),
+        ...queuedInput,
+      ].join('\n');
       clearTransientInput();
 
       let baseLogLength = 0;
@@ -721,6 +725,7 @@ export const App: React.FC = () => {
           stdin,
           // ── Streaming stdout/stderr callback ──────────────
           { onOutput: (_stream: 'stdout' | 'stderr', text: string, attempt = 1) => {
+            if (!isCurrentExecution()) return;
             if (!text) return;
             setTerminalLogs((prev) => {
               if (attempt > highestAttempt) {
@@ -732,6 +737,7 @@ export const App: React.FC = () => {
           },
           // ── Status update callback ────────────────────────
           onStatus: (status: ExecutionStatus) => {
+            if (!isCurrentExecution()) return;
             setExecutionStatus(status);
             if (
               status === 'completed' ||
@@ -744,6 +750,7 @@ export const App: React.FC = () => {
           }}
         )
         .then((result) => {
+          if (!isCurrentExecution()) return;
           const finalStatus =
             result.status ??
             (result.success ? 'completed' : 'failed');
@@ -762,10 +769,13 @@ export const App: React.FC = () => {
               errorText,
             ]);
 
-            // For Python, we show the error directly in terminal
-            // rather than using the C-specific error interpreter
-            setErrors([]);
-            clearErrorState();
+            const friendly = interpretPythonError(errorText);
+            setErrors(friendly);
+            if (friendly.length > 0 && monacoRef.current && editorRef.current) {
+              applyMonacoMarkers(monacoRef.current, editorRef.current, friendly);
+              goToLineColumn(editorRef.current, friendly[0].line, friendly[0].column);
+              setSelectedErrorId(friendly[0].id);
+            }
             return;
           }
 
@@ -780,6 +790,7 @@ export const App: React.FC = () => {
           }
         })
         .catch((err: unknown) => {
+          if (!isCurrentExecution()) return;
           setExecutionStatus('failed');
           setIsRunning(false);
           clearTransientInput();
@@ -807,7 +818,6 @@ export const App: React.FC = () => {
     files,
     programInputs,
     queuedInput,
-    terminalInput,
   ]);
 
   // Keep the ref current so F5 always invokes the latest handleRun
@@ -822,8 +832,7 @@ export const App: React.FC = () => {
   const handleClearTerminal = useCallback(() => {
     setTerminalLogs([]);
     setClearGeneration((g) => g + 1); // triggers hard clear in xterm
-    setQueuedInput('');
-    setTerminalInput('');
+    setQueuedInput([]);
     setProgramInputs([]);
     setHtmlPreviewDoc(null);
     setExecutionStatus('idle');
@@ -1157,16 +1166,15 @@ export const App: React.FC = () => {
                   // Normalize the line for the runtime while preserving the
                   // typed value in the UI state.
                   const stdinLine = input.endsWith('\n') ? input : `${input}\n`;
+                  let sent = false;
                   if (activeLanguage === 'c') {
-                    compilerClient.sendInput(stdinLine);
+                    sent = compilerClient.sendInput(stdinLine);
                   } else if (activeLanguage === 'python') {
-                    pythonClient.sendInput(stdinLine);
+                    sent = pythonClient.sendInput(stdinLine);
                   }
-                  setQueuedInput((previous) => {
-                    const next = previous ? `${previous}\n${input}` : input;
-                    return next;
-                  });
-                  setTerminalInput(input);
+                  if (!sent) {
+                    setQueuedInput((previous) => [...previous, input]);
+                  }
                 }}
                 onClearTerminal={handleClearTerminal}
                 isWaitingForInput={executionStatus === 'waiting-input'}
@@ -1244,16 +1252,15 @@ export const App: React.FC = () => {
                   // Normalize the line for the runtime while preserving the
                   // typed value in the UI state.
                   const stdinLine = input.endsWith('\n') ? input : `${input}\n`;
+                  let sent = false;
                   if (activeLanguage === 'c') {
-                    compilerClient.sendInput(stdinLine);
+                    sent = compilerClient.sendInput(stdinLine);
                   } else if (activeLanguage === 'python') {
-                    pythonClient.sendInput(stdinLine);
+                    sent = pythonClient.sendInput(stdinLine);
                   }
-                  setQueuedInput((previous) => {
-                    const next = previous ? `${previous}\n${input}` : input;
-                    return next;
-                  });
-                  setTerminalInput(input);
+                  if (!sent) {
+                    setQueuedInput((previous) => [...previous, input]);
+                  }
                 }}
                 onClearTerminal={handleClearTerminal}
                 isWaitingForInput={executionStatus === 'waiting-input'}

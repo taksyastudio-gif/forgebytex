@@ -48,7 +48,10 @@ export const ConsolePreviewPanel: React.FC<ConsolePreviewPanelProps> = ({
   terminalPosition,
   onTerminalPositionChange,
 }) => {
-  const isHtml = activeLanguage === 'html';
+  const isHtml =
+    activeLanguage === 'html' ||
+    activeLanguage === 'css' ||
+    activeLanguage === 'javascript';
   const { label: statusLabel, color: statusColor } = STATUS_CONFIG[executionStatus];
 
   return (

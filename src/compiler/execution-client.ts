@@ -12,13 +12,66 @@ import type {
  * While a program is suspended waiting for user input the watchdog is
  * disarmed completely.
  */
-const IDLE_TIMEOUT_MS = 30000;
+const IDLE_TIMEOUT_MS = 120000;
+
+const SHARED_STDIN_HEADER_BYTES = 16;
+const SHARED_STDIN_CAPACITY_BYTES = 1024 * 1024;
+
+class SharedStdinPipe {
+  readonly buffer: SharedArrayBuffer;
+  private readonly control: Int32Array;
+  private readonly data: Uint8Array;
+  private readonly encoder = new TextEncoder();
+
+  constructor(initialText = '') {
+    this.buffer = new SharedArrayBuffer(
+      SHARED_STDIN_HEADER_BYTES + SHARED_STDIN_CAPACITY_BYTES
+    );
+    this.control = new Int32Array(this.buffer, 0, 4);
+    this.data = new Uint8Array(this.buffer, SHARED_STDIN_HEADER_BYTES);
+
+    if (initialText) {
+      this.append(initialText);
+    }
+  }
+
+  append(text: string): void {
+    if (!text) {
+      return;
+    }
+
+    const bytes = this.encoder.encode(text);
+    const writeIndex = Atomics.load(this.control, 0);
+
+    if (writeIndex + bytes.length > this.data.length) {
+      throw new Error('Interactive stdin buffer overflow.');
+    }
+
+    this.data.set(bytes, writeIndex);
+    Atomics.store(this.control, 0, writeIndex + bytes.length);
+    Atomics.add(this.control, 3, 1);
+    Atomics.notify(this.control, 3);
+  }
+
+  close(): void {
+    Atomics.store(this.control, 2, 1);
+    Atomics.add(this.control, 3, 1);
+    Atomics.notify(this.control, 3);
+  }
+}
+
+const canUseSharedStdin = (): boolean =>
+  typeof SharedArrayBuffer !== 'undefined' &&
+  typeof Atomics !== 'undefined' &&
+  typeof globalThis !== 'undefined' &&
+  globalThis.crossOriginIsolated === true;
 
 type PendingRequest = {
   resolve: (result: ExecutionResult) => void;
   reject: (error: Error) => void;
   worker: Worker;
   hooks: RunHooks;
+  stdinPipe?: SharedStdinPipe | null;
 };
 
 /**
@@ -121,7 +174,7 @@ export class ExecutionClient {
     pending.resolve({
       success: false,
       output: '',
-      error: 'Execution timed out after 30 seconds without activity.',
+      error: 'Execution timed out after 120 seconds without activity.',
       exitCode: null,
       waitingForInput: false,
       status: 'timeout',
@@ -172,8 +225,10 @@ export class ExecutionClient {
         return;
       }
 
-      // Program produced output: it is alive, reward it with time.
-      this.armWatchdog(data.requestId);
+      if (!pending.stdinPipe) {
+        // Program produced output: it is alive, reward it with time.
+        this.armWatchdog(data.requestId);
+      }
       pending.hooks.onOutput?.(
         data.stream,
         data.text,
@@ -192,7 +247,9 @@ export class ExecutionClient {
         // Suspended on the user: pause the watchdog entirely.
         this.disarmWatchdog(data.requestId);
       } else {
-        this.armWatchdog(data.requestId);
+        if (!pending.stdinPipe) {
+          this.armWatchdog(data.requestId);
+        }
       }
 
       pending.hooks.onStatus?.(data.status);
@@ -297,8 +354,16 @@ export class ExecutionClient {
       type: 'compile',
       requestId,
       code,
-      stdin,
     };
+
+    let stdinPipe: SharedStdinPipe | null = null;
+    if (canUseSharedStdin()) {
+      stdinPipe = new SharedStdinPipe(stdin);
+      request.stdinBuffer = stdinPipe.buffer;
+      request.stdin = '';
+    } else {
+      request.stdin = stdin;
+    }
 
     this.activeRequestId = requestId;
 
@@ -308,9 +373,12 @@ export class ExecutionClient {
         reject,
         worker,
         hooks,
+        stdinPipe,
       });
 
-      this.armWatchdog(requestId);
+      if (!stdinPipe) {
+        this.armWatchdog(requestId);
+      }
 
       worker.postMessage(request);
     });
@@ -343,6 +411,15 @@ export class ExecutionClient {
       input,
     };
 
+    if (pending.stdinPipe) {
+      try {
+        pending.stdinPipe.append(input);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     // Resuming activity: give the run a fresh watchdog window.
     this.armWatchdog(requestId);
 
@@ -360,6 +437,7 @@ export class ExecutionClient {
     const pending = this.pendingRequests.get(requestId);
 
     if (pending) {
+      pending.stdinPipe?.close();
       this.teardownRequest(requestId);
       // Stop is a hard reset: drop the worker and settle the run so the UI
       // can clear transient stdin and start cleanly on the next run.
@@ -386,6 +464,7 @@ export class ExecutionClient {
   /** Tear everything down (page unload / hard reset). */
   terminate(): void {
     for (const requestId of this.pendingRequests.keys()) {
+      this.pendingRequests.get(requestId)?.stdinPipe?.close();
       this.disarmWatchdog(requestId);
     }
 
