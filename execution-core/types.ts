@@ -135,6 +135,9 @@ export interface InteractiveProcess {
   
   /** Write to process stdin */
   write(data: string): void;
+
+  /** Close stdin so a waiting reader receives EOF. */
+  closeStdin?(): void;
   
   /** Read from process stdout */
   read(): string;

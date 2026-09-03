@@ -347,5 +347,46 @@ print(x * 2)
       
       expect(output).toContain('42');
     });
+
+    test('input supports waiting and multiple inputs without disabling timeout', async () => {
+      const events: string[] = [];
+      const process = await executor.createInteractiveProcess({
+        language: 'python',
+        source: `
+a = int(input("A: "))
+b = int(input("B: "))
+print(a + b)
+        `,
+        mode: 'interactive',
+        limits: { wallTime: 2 },
+      }, {
+        onExit: (result) => events.push(`${result.status}:${result.stdout}`),
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      process.write('2\n');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      process.write('3\n');
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      expect(events.join('')).toContain('completed:A: B: 5');
+    });
+
+    test('input not reached still times out', async () => {
+      const result = await new Promise<{ status: string }>(async (resolve) => {
+        await executor.createInteractiveProcess({
+          language: 'python',
+          source: `
+while True:
+    pass
+value = input()
+          `,
+          mode: 'interactive',
+          limits: { wallTime: 1 },
+        }, { onExit: (value) => resolve(value) });
+      });
+
+      expect(result.status).toBe('timeout');
+    });
   });
 });

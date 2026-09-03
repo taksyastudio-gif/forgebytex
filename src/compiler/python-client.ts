@@ -308,6 +308,8 @@ class PythonClientFacade {
       body: JSON.stringify({
         input,
       }),
+    }).catch(() => {
+      // The session may disappear while the tab is closing.
     });
 
     return true;
@@ -324,6 +326,7 @@ class PythonClientFacade {
         headers: {
           'Content-Type': 'application/json',
         },
+        keepalive: true,
       });
 
       resolve({

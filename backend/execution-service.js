@@ -111,6 +111,7 @@ function mapStatus(coreStatus) {
     'preparing': 'preparing',
     'compiling': 'compiling',
     'running': 'running',
+    'waiting-input': 'waiting-input',
     'compile-error': 'failed',
     'completed': 'completed',
     'failed': 'failed',
@@ -432,9 +433,7 @@ function handleInput(sessionId, input, eof = false) {
 
   try {
     if (eof) {
-      // Close stdin (EOF)
-      // Note: InteractiveProcess interface doesn't have closeStdin, so we send empty input
-      // The process will treat closed stdin as EOF
+      session.interactiveProcess.closeStdin?.();
     } else if (input) {
       session.interactiveProcess.write(input);
     }

@@ -402,11 +402,17 @@ class CInteractiveProcess {
             }
         }, Math.max(1, limits.wallTime ?? RESOURCE_LIMITS.wallTime) * 1000);
     }
+    clearTimeout() {
+        if (this.timeoutHandle) {
+            clearTimeout(this.timeoutHandle);
+            this.timeoutHandle = null;
+        }
+    }
     finish(success, status, diagnostics, exitCode = null) {
         if (this.settled)
             return;
         this.settled = true;
-        clearTimeout(this.timeoutHandle);
+        this.clearTimeout();
         this.callbacks?.onExit?.({
             success, status, phase: 'run', stdout: this.stdoutBuffer, stderr: this.stderrBuffer,
             exitCode, signal: null, duration: 0, diagnostics,
@@ -451,6 +457,11 @@ class CInteractiveProcess {
     write(data) {
         if (this.alive && this.process.stdin) {
             this.process.stdin.write(data);
+        }
+    }
+    closeStdin() {
+        if (this.alive && this.process.stdin && !this.process.stdin.destroyed) {
+            this.process.stdin.end();
         }
     }
     read() {

@@ -341,6 +341,9 @@ class CompilerClientFacade {
       body: JSON.stringify({
         input,
       }),
+    }).catch(() => {
+      // The session may disappear while the tab is closing; the next status
+      // event (or the normal stop path) remains authoritative.
     });
 
     return true;
@@ -358,6 +361,7 @@ class CompilerClientFacade {
         headers: {
           'Content-Type': 'application/json',
         },
+        keepalive: true,
       });
 
       resolve({

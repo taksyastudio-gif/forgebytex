@@ -357,12 +357,16 @@ export class ExecutionClient {
     };
 
     let stdinPipe: SharedStdinPipe | null = null;
+    const initialStdin = stdin.length > 0 && !stdin.endsWith('\n')
+      ? `${stdin}\n`
+      : stdin;
+
     if (canUseSharedStdin()) {
-      stdinPipe = new SharedStdinPipe(stdin);
+      stdinPipe = new SharedStdinPipe(initialStdin);
       request.stdinBuffer = stdinPipe.buffer;
       request.stdin = '';
     } else {
-      request.stdin = stdin;
+      request.stdin = initialStdin;
     }
 
     this.activeRequestId = requestId;

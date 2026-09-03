@@ -31,6 +31,15 @@ class StdinRequiredError extends Error {
   }
 }
 
+const isStdinRequiredError = (error: unknown): boolean => {
+  if (error instanceof StdinRequiredError) {
+    return true;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('stdin is waiting for more input');
+};
+
 class InteractiveStdinFile extends File {
   constructor() {
     super(new Uint8Array());
@@ -387,7 +396,7 @@ async function compileAndRun(
         };
       });
     } catch (error) {
-      if (error instanceof StdinRequiredError) {
+      if (isStdinRequiredError(error)) {
         /*
          * browsercc/WASI cannot suspend and resume the same C stack frame at
          * scanf(). Report waitingForInput so the client replays the program

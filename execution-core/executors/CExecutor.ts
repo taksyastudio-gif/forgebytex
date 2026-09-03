@@ -525,7 +525,7 @@ class CInteractiveProcess implements InteractiveProcess {
   private stdoutBuffer: string = '';
   private stderrBuffer: string = '';
   private settled = false;
-  private timeoutHandle: ReturnType<typeof setTimeout>;
+  private timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   private outputLimitExceeded = false;
   private readonly maxOutputSize: number;
   
@@ -557,10 +557,17 @@ class CInteractiveProcess implements InteractiveProcess {
     }, Math.max(1, limits.wallTime ?? RESOURCE_LIMITS.wallTime) * 1000);
   }
 
+  private clearTimeout(): void {
+    if (this.timeoutHandle) {
+      clearTimeout(this.timeoutHandle);
+      this.timeoutHandle = null;
+    }
+  }
+
   private finish(success: boolean, status: ExecutionResult['status'], diagnostics?: string, exitCode: number | null = null): void {
     if (this.settled) return;
     this.settled = true;
-    clearTimeout(this.timeoutHandle);
+    this.clearTimeout();
     this.callbacks?.onExit?.({
       success, status, phase: 'run', stdout: this.stdoutBuffer, stderr: this.stderrBuffer,
       exitCode, signal: null, duration: 0, diagnostics,
@@ -610,6 +617,12 @@ class CInteractiveProcess implements InteractiveProcess {
   write(data: string): void {
     if (this.alive && this.process.stdin) {
       this.process.stdin.write(data);
+    }
+  }
+
+  closeStdin(): void {
+    if (this.alive && this.process.stdin && !this.process.stdin.destroyed) {
+      this.process.stdin.end();
     }
   }
   

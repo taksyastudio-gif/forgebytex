@@ -125,9 +125,8 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       if (data === '\r' || data === '\n') {
         const rawInput = inputBufferRef.current;
         inputBufferRef.current = '';
-        if (rawInput) {
-          onInputRef.current(rawInput);
-        }
+        // Preserve empty lines: readers still need the newline delimiter.
+        onInputRef.current(rawInput);
         terminal.write('\r\n');
         return;
       }

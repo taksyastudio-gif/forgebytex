@@ -214,6 +214,16 @@ export const App: React.FC = () => {
     );
   const executionGenerationRef = useRef(0);
 
+  useEffect(() => {
+    const stopRuntime = () => {
+      compilerClient.terminate();
+      pythonClient.terminate();
+    };
+
+    window.addEventListener('pagehide', stopRuntime);
+    return () => window.removeEventListener('pagehide', stopRuntime);
+  }, []);
+
   const handleEditorMount = useCallback(
     (
       editor: import('monaco-editor').editor.IStandaloneCodeEditor,
