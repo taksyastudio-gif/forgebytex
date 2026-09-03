@@ -1,18 +1,17 @@
 {
   "version": 2,
-  "cleanUrls": true,
   "routes": [
     {
       "handle": "filesystem"
     },
     {
       "src": "/google60f88397bab2c922.html",
-      "dest": "/google60f88397bab2c922.html",
-      "cleanUrls": false
+      "dest": "/google60f88397bab2c922.html"
     },
     {
       "src": "/.*",
-      "dest": "/index.html"
+      "dest": "/index.html",
+      "cleanUrls": true
     }
   ],
   "headers": [
