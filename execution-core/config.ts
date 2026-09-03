@@ -82,7 +82,7 @@ export let EXECUTION_ENV = {
   gccPath: process.env.GCC_PATH || 'gcc',
   
   /** Path to Python executable */
-  pythonPath: process.env.PYTHON_PATH || 'python3',
+  pythonPath: process.env.PYTHON_PATH || (process.platform === 'win32' ? 'python' : 'python3'),
 };
 
 /**

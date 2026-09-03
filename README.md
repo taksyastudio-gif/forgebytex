@@ -17,6 +17,13 @@ VITE_BACKEND_URL=http://localhost:3001
 PORT=3001
 ```
 
+### Supabase feedback
+
+Copy and run [`supabase/feedback.sql`](supabase/feedback.sql) in the Supabase SQL
+editor, then set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the frontend
+environment. The policy permits feedback submissions but does not expose
+feedback rows for public reads.
+
 ## Render deployment
 
 This project includes a Render config at [render.yaml](render.yaml) for the backend service.

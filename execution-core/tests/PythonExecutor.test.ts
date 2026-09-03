@@ -11,13 +11,12 @@
  */
 
 import { PythonExecutor } from '../executors/PythonExecutor.js';
-import { detectIsolate } from '../config.js';
 import type { ExecutionRequest } from '../types.js';
+import { detectIsolate } from '../config.js';
 
 describe('PythonExecutor', () => {
   let executor: PythonExecutor;
   const hasIsolate = detectIsolate();
-
   beforeAll(() => {
     executor = new PythonExecutor();
   });
@@ -241,7 +240,7 @@ except ZeroDivisionError:
   });
 
   describe('Resource Limits', () => {
-    test('14. Timeout handling', async () => {
+    (hasIsolate ? test : test.skip)('14. Timeout handling', async () => {
       const request: ExecutionRequest = {
         language: 'python',
         source: `while True: pass`,
@@ -260,7 +259,7 @@ except ZeroDivisionError:
       expect(result.success).toBe(false);
     });
 
-    test('15. Memory limit', async () => {
+    (hasIsolate ? test : test.skip)('15. Memory limit', async () => {
       const request: ExecutionRequest = {
         language: 'python',
         source: `
@@ -326,7 +325,7 @@ print(x * 2)
   });
 
   describe('Interactive Process', () => {
-    test('Interactive process creation', async () => {
+    (hasIsolate ? test : test.skip)('Interactive process creation', async () => {
       const request: ExecutionRequest = {
         language: 'python',
         source: `

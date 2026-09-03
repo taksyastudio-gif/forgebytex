@@ -922,6 +922,42 @@ app.get('/api/runtime', (_req, res) => {
   res.json(runtime);
 });
 
+app.post('/api/feedback', async (req, res) => {
+  const payload = req.body ?? {};
+  const type = payload.type;
+  const message = typeof payload.message === 'string' ? payload.message.trim() : '';
+  const theme = typeof payload.theme === 'string' ? payload.theme : '';
+  const language = typeof payload.language === 'string' ? payload.language : '';
+  const appVersion = typeof payload.app_version === 'string' ? payload.app_version : '';
+
+  if (!['bug', 'suggestion', 'feedback'].includes(type) ||
+      !message || message.length > 5000 || !theme || !language || !appVersion) {
+    return res.status(400).json({ success: false, error: 'Invalid feedback payload.' });
+  }
+
+  try {
+    const feedbackPath = process.env.FEEDBACK_FILE || path.join(os.tmpdir(), 'forgebyte-feedback.jsonl');
+    await fs.promises.appendFile(
+      feedbackPath,
+      `${JSON.stringify({
+        type,
+        message,
+        theme,
+        language,
+        app_version: appVersion,
+        created_at: new Date().toISOString(),
+      })}\n`,
+      'utf8'
+    );
+    return res.status(201).json({ success: true });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unable to store feedback.',
+    });
+  }
+});
+
 app.post('/api/compile', async (req, res) => {
   const code = typeof req.body?.code === 'string' ? req.body.code : '';
   const stdin = typeof req.body?.stdin === 'string' ? req.body.stdin : '';

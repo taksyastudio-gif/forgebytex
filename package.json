@@ -11,8 +11,10 @@
     "prebuild": "node scripts/copy-monaco.mjs && node scripts/copy-pyodide.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "npm run test:core",
     "preview": "vite preview",
-    "server": "node backend/server.js"
+    "server": "node backend/server.js",
+    "test:core": "npm --prefix execution-core test"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",

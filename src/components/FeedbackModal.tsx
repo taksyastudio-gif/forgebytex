@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Bug, Lightbulb, Heart, Send, X, Loader2, CheckCircle2 } from 'lucide-react';
 import { supabase, type FeedbackType } from '../lib/supabase';
 import type { EditorTheme, SupportedLanguage } from '../types/byteplay';
@@ -17,6 +17,16 @@ const FEEDBACK_TYPES: Array<{ value: FeedbackType; label: string; icon: React.Re
 ];
 
 const APP_VERSION = '0.0.0';
+const MAX_MESSAGE_LENGTH = 5000;
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '');
+
+interface FeedbackPayload {
+  type: FeedbackType;
+  message: string;
+  theme: EditorTheme;
+  language: SupportedLanguage;
+  app_version: string;
+}
 
 export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   isOpen,
@@ -29,42 +39,68 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+    }
+  }, []);
+
+  const submitToFallback = async (payload: FeedbackPayload) => {
+    const response = await fetch(`${BACKEND_URL}/api/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(result?.error || 'Failed to submit feedback');
+    }
+  };
 
   if (!isOpen) return null;
 
   const handleSubmit = async () => {
-    if (!message.trim()) {
+    const trimmedMessage = message.trim();
+
+    if (!trimmedMessage) {
       setError('Please enter a message');
       return;
     }
 
-    if (!supabase) {
-      setError('Feedback service is not configured');
+    if (trimmedMessage.length > MAX_MESSAGE_LENGTH) {
+      setError(`Please keep your message under ${MAX_MESSAGE_LENGTH} characters`);
       return;
     }
 
     setIsSubmitting(true);
     setError(null);
 
-    try {
-      const { error: insertError } = await supabase
-        .from('feedback')
-        .insert({
-          type: selectedType,
-          message: message.trim(),
-          theme: currentTheme,
-          language: currentLanguage,
-          app_version: APP_VERSION,
-        });
+    const payload: FeedbackPayload = {
+      type: selectedType,
+      message: trimmedMessage,
+      theme: currentTheme,
+      language: currentLanguage,
+      app_version: APP_VERSION,
+    };
 
-      if (insertError) {
-        throw insertError;
+    try {
+      if (supabase) {
+        const { error: insertError } = await supabase.from('feedback').insert(payload);
+        if (insertError) {
+          await submitToFallback(payload);
+        }
+      } else {
+        await submitToFallback(payload);
       }
 
       setIsSuccess(true);
       setMessage('');
       
-      setTimeout(() => {
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null;
         setIsSuccess(false);
         onClose();
       }, 2000);
@@ -77,6 +113,10 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
 
   const handleClose = () => {
     if (!isSubmitting) {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
       setIsSuccess(false);
       setError(null);
       onClose();
@@ -85,9 +125,14 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
 
   return (
     <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="modal-panel w-[min(400px,95%)] rounded-xl p-4 shadow-2xl border bg-surface">
+      <div
+        className="modal-panel w-[min(400px,95%)] rounded-xl p-4 shadow-2xl border bg-surface"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feedback-title"
+      >
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-bold text-primary">Feedback</h2>
+          <h2 id="feedback-title" className="text-sm font-bold text-primary">Feedback</h2>
           <button
             onClick={handleClose}
             disabled={isSubmitting}
@@ -129,6 +174,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
             <textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
+              maxLength={MAX_MESSAGE_LENGTH}
               placeholder="Describe your feedback..."
               disabled={isSubmitting}
               rows={4}

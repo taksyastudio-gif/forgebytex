@@ -344,7 +344,7 @@ int main() {
       expect(result.success).toBe(false);
     });
 
-    test('16. Stack overflow (deep recursion)', async () => {
+    (hasIsolate ? test : test.skip)('16. Stack overflow (deep recursion)', async () => {
       const request: ExecutionRequest = {
         language: 'c',
         source: `
@@ -374,7 +374,7 @@ int main() {
   });
 
   describe('Resource Limits', () => {
-    test('17. Timeout handling', async () => {
+    (hasIsolate ? test : test.skip)('17. Timeout handling', async () => {
       const request: ExecutionRequest = {
         language: 'c',
         source: `
@@ -399,7 +399,7 @@ int main() {
       expect(result.success).toBe(false);
     });
 
-    test('18. Memory limit', async () => {
+    (hasIsolate ? test : test.skip)('18. Memory limit', async () => {
       const request: ExecutionRequest = {
         language: 'c',
         source: `
