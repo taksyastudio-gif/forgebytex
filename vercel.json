@@ -7,7 +7,8 @@
     },
     {
       "src": "/google60f88397bab2c922.html",
-      "dest": "/google60f88397bab2c922.html"
+      "dest": "/google60f88397bab2c922.html",
+      "cleanUrls": false
     },
     {
       "src": "/.*",
