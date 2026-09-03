@@ -10,8 +10,7 @@
     },
     {
       "src": "/.*",
-      "dest": "/index.html",
-      "cleanUrls": true
+      "dest": "/index.html"
     }
   ],
   "headers": [
