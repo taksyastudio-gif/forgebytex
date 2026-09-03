@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://forgebytex-arena.vercel.app/sitemap.xml
+Sitemap: https://forgebytex-cpyzmm1u8-taksya.vercel.app/sitemap.xml

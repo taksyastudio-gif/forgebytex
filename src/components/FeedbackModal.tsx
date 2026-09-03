@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bug, Lightbulb, Heart, Send, X, Loader2, CheckCircle2 } from 'lucide-react';
-import { supabase, type FeedbackType } from '../lib/supabase';
 import type { EditorTheme, SupportedLanguage } from '../types/byteplay';
+
+type FeedbackType = 'bug' | 'suggestion' | 'feedback';
 
 interface FeedbackModalProps {
   isOpen: boolean;
@@ -47,7 +48,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     }
   }, []);
 
-  const submitToFallback = async (payload: FeedbackPayload) => {
+  const submitFeedback = async (payload: FeedbackPayload) => {
     const response = await fetch(`${BACKEND_URL}/api/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -87,18 +88,11 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     };
 
     try {
-      if (supabase) {
-        const { error: insertError } = await supabase.from('feedback').insert(payload);
-        if (insertError) {
-          await submitToFallback(payload);
-        }
-      } else {
-        await submitToFallback(payload);
-      }
+      await submitFeedback(payload);
 
       setIsSuccess(true);
       setMessage('');
-      
+
       closeTimerRef.current = setTimeout(() => {
         closeTimerRef.current = null;
         setIsSuccess(false);
