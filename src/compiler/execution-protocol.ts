@@ -17,7 +17,12 @@ export type ExecutionStatus =
   | 'completed'
   | 'failed'
   | 'stopped'
-  | 'timeout';
+  | 'timeout'
+  | 'memory-limit'
+  | 'output-limit'
+  | 'process-limit'
+  | 'sandbox-error'
+  | 'infrastructure-error';
 
 export type OutputStream = 'stdout' | 'stderr';
 
@@ -120,7 +125,12 @@ export const isTerminalStatus = (
   status === 'completed' ||
   status === 'failed' ||
   status === 'stopped' ||
-  status === 'timeout';
+  status === 'timeout' ||
+  status === 'memory-limit' ||
+  status === 'output-limit' ||
+  status === 'process-limit' ||
+  status === 'sandbox-error' ||
+  status === 'infrastructure-error';
 
 /** Legacy alias kept so existing imports keep working. */
 export type CompileResult = ExecutionResult;

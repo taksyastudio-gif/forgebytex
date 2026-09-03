@@ -22,7 +22,7 @@ import type {
   InteractiveProcess,
   ProcessCallbacks,
 } from '../types.js';
-import { COMPILER_CONFIG, EXECUTION_ENV, SANDBOX_CONFIG, detectIsolate } from '../config.js';
+import { COMPILER_CONFIG, EXECUTION_ENV, RESOURCE_LIMITS, SANDBOX_CONFIG, detectIsolate } from '../config.js';
 
 /**
  * C executor implementation
@@ -245,17 +245,18 @@ export class CExecutor implements LanguageExecutor {
     request: ExecutionRequest,
     callbacks?: ProcessCallbacks,
     boxId?: string | null
-  ): Promise<{ 
-    success: boolean; 
-    binaryPath?: string; 
+  ): Promise<{
+    success: boolean;
+    binaryPath?: string;
     diagnostics?: string;
     stdout?: string;
     stderr?: string;
     exitCode?: number | null;
   }> {
     callbacks?.onStatus?.('compiling');
-    
-    const outputPath = join(workspace, 'main');
+
+    const binaryName = this.platform === 'win32' ? 'main.exe' : 'main';
+    const outputPath = join(workspace, binaryName);
     const limits = request.limits || {};
     
     const compileArgs = [
@@ -523,6 +524,10 @@ class CInteractiveProcess implements InteractiveProcess {
   private callbacks?: ProcessCallbacks;
   private stdoutBuffer: string = '';
   private stderrBuffer: string = '';
+  private settled = false;
+  private timeoutHandle: ReturnType<typeof setTimeout>;
+  private outputLimitExceeded = false;
+  private readonly maxOutputSize: number;
   
   constructor(
     binaryPath: string,
@@ -534,6 +539,8 @@ class CInteractiveProcess implements InteractiveProcess {
   ) {
     this.cleanup = cleanup || (() => {});
     this.callbacks = callbacks;
+    const limits = _request.limits || RESOURCE_LIMITS;
+    this.maxOutputSize = Math.max(1, limits.output ?? RESOURCE_LIMITS.output) * 1024 * 1024;
     
     // Spawn process
     this.process = spawn(binaryPath, [], {
@@ -542,13 +549,34 @@ class CInteractiveProcess implements InteractiveProcess {
     });
     
     this.setupProcessListeners();
+    this.timeoutHandle = setTimeout(() => {
+      if (this.alive) {
+        this.finish(false, 'timeout', 'Execution timed out.');
+        this.process.kill('SIGKILL');
+      }
+    }, Math.max(1, limits.wallTime ?? RESOURCE_LIMITS.wallTime) * 1000);
   }
-  
+
+  private finish(success: boolean, status: ExecutionResult['status'], diagnostics?: string, exitCode: number | null = null): void {
+    if (this.settled) return;
+    this.settled = true;
+    clearTimeout(this.timeoutHandle);
+    this.callbacks?.onExit?.({
+      success, status, phase: 'run', stdout: this.stdoutBuffer, stderr: this.stderrBuffer,
+      exitCode, signal: null, duration: 0, diagnostics,
+    });
+  }
+
   private setupProcessListeners(): void {
     this.process.stdout.on('data', (data: Buffer) => {
       const text = data.toString();
       this.stdoutBuffer += text;
       this.callbacks?.onStdout?.(text);
+      if (this.stdoutBuffer.length + this.stderrBuffer.length > this.maxOutputSize && !this.outputLimitExceeded) {
+        this.outputLimitExceeded = true;
+        this.finish(false, 'output-limit', 'Output limit exceeded.');
+        this.process.kill('SIGKILL');
+      }
     });
     
     this.process.stderr.on('data', (data: Buffer) => {
@@ -557,8 +585,9 @@ class CInteractiveProcess implements InteractiveProcess {
       this.callbacks?.onStderr?.(text);
     });
     
-    this.process.on('close', () => {
+    this.process.on('close', (exitCode: number | null) => {
       this.alive = false;
+      this.finish(exitCode === 0, exitCode === 0 ? 'completed' : 'failed', exitCode === 0 ? undefined : 'The process exited with an error.', exitCode);
       this.cleanup();
     });
     
@@ -604,6 +633,7 @@ class CInteractiveProcess implements InteractiveProcess {
   
   stop(): void {
     if (this.alive) {
+      this.finish(false, 'failed', 'Execution stopped.');
       this.process.kill('SIGKILL');
       this.alive = false;
       this.cleanup();

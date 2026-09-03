@@ -71,12 +71,54 @@ class StdinRequiredError extends Error {
 type Session = {
   code: string;
   stdin: string;
+  stdinBuffer: SharedArrayBuffer | null;
   attempt: number;
 };
 
 const executionSessions = new Map<string, Session>();
 
 let executionChain: Promise<void> = Promise.resolve();
+
+class SharedStdinReader {
+  private readonly control: Int32Array;
+  private readonly data: Uint8Array;
+  private readonly decoder = new TextDecoder();
+
+  constructor(buffer: SharedArrayBuffer) {
+    this.control = new Int32Array(buffer, 0, 4);
+    this.data = new Uint8Array(buffer, 16);
+  }
+
+  readLine(): string {
+    while (true) {
+      const writeIndex = Atomics.load(this.control, 0);
+      const readIndex = Atomics.load(this.control, 1);
+
+      for (let index = readIndex; index < writeIndex; index += 1) {
+        if (this.data[index] !== 10) {
+          continue;
+        }
+
+        const line = this.decoder.decode(this.data.slice(readIndex, index));
+        Atomics.store(this.control, 1, index + 1);
+        return line;
+      }
+
+      if (Atomics.load(this.control, 2) === 1) {
+        if (readIndex < writeIndex) {
+          const line = this.decoder.decode(this.data.slice(readIndex, writeIndex));
+          Atomics.store(this.control, 1, writeIndex);
+          return line;
+        }
+
+        return '';
+      }
+
+      const version = Atomics.load(this.control, 3);
+      Atomics.wait(this.control, 3, version);
+    }
+  }
+}
 
 const enqueueExecution = (task: () => Promise<void>): void => {
   executionChain = executionChain.then(task, task);
@@ -154,12 +196,21 @@ async function runPython(
       },
     });
 
-    // Live stdin: read lines from session.stdin buffer starting at offset 0 for this attempt.
+    const sharedStdin = session.stdinBuffer
+      ? new SharedStdinReader(session.stdinBuffer)
+      : null;
+
+    // Live stdin: read from shared memory when available, otherwise use the
+    // replay buffer maintained by the legacy fallback path.
     let stdinOffset = 0;
     let wasStdinRequired = false;
 
     pyodide.setStdin({
       stdin: () => {
+        if (sharedStdin) {
+          return sharedStdin.readLine();
+        }
+
         if (stdinOffset < session.stdin.length) {
           const nl = session.stdin.indexOf('\n', stdinOffset);
           if (nl !== -1) {
@@ -391,6 +442,7 @@ self.addEventListener(
     const session: Session = {
       code: data.code,
       stdin: data.stdin ?? '',
+      stdinBuffer: data.stdinBuffer ?? null,
       attempt: 1,
     };
 

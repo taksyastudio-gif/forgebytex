@@ -5,10 +5,10 @@
  * for code execution with proper sandboxing and resource limits.
  */
 
-import type { Language, ExecutionRequest, ExecutionResult, ExecutionStatus, InteractiveProcess, ProcessCallbacks } from './types';
-import { CExecutor } from './executors/CExecutor';
-import { PythonExecutor } from './executors/PythonExecutor';
-import { mergeLimits, getExecutionLimits, EXECUTION_ENV } from './config';
+import type { Language, ExecutionRequest, ExecutionResult, InteractiveProcess, ProcessCallbacks } from './types.js';
+import { CExecutor } from './executors/CExecutor.js';
+import { PythonExecutor } from './executors/PythonExecutor.js';
+import { mergeLimits, EXECUTION_ENV } from './config.js';
 
 /**
  * Execution manager - main entry point for code execution

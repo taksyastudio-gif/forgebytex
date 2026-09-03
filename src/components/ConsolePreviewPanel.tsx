@@ -33,6 +33,11 @@ const STATUS_CONFIG: Record<
   failed:        { label: 'Failed',     color: 'text-red-400' },
   stopped:       { label: 'Stopped',    color: 'text-muted' },
   timeout:       { label: 'Timed out', color: 'text-orange-400' },
+  'memory-limit': { label: 'Memory limit exceeded', color: 'text-orange-400' },
+  'output-limit': { label: 'Output limit exceeded', color: 'text-orange-400' },
+  'process-limit': { label: 'Process limit exceeded', color: 'text-orange-400' },
+  'sandbox-error': { label: 'Sandbox error', color: 'text-red-400' },
+  'infrastructure-error': { label: 'Infrastructure error', color: 'text-red-400' },
 };
 
 export const ConsolePreviewPanel: React.FC<ConsolePreviewPanelProps> = ({

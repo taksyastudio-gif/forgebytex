@@ -4,7 +4,7 @@
  * Centralized configuration for resource limits, sandbox settings, and execution parameters.
  */
 
-import type { ResourceLimits } from './types';
+import type { ResourceLimits } from './types.js';
 import { spawnSync } from 'child_process';
 
 /**

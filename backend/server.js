@@ -1,5 +1,15 @@
 import express from 'express';
 import cors from 'cors';
+import {
+  startExecution,
+  handleInput,
+  stopSession,
+  getEventStream,
+  cleanupSession,
+  getServiceStatus,
+  hasIsolate,
+  PRODUCTION_MODE,
+} from './execution-service.js';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -989,40 +999,27 @@ app.post('/api/compile', async (req, res) => {
 
 app.post('/api/execute', async (req, res) => {
   const payload = req.body ?? {};
-  if (payload?.interactive === true) {
-    const result = await startInteractiveSession(payload);
-
-    if (result.success) {
-      return res.status(202).json(result);
-    }
-
-    if (result.phase === 'runtime-discovery' || result.error?.code === 'RUNTIME_MISSING') {
-      return res.status(503).json(result);
-    }
-
-    if (result.phase === 'validation') {
-      return res.status(400).json(result);
-    }
-
-    if (result.phase === 'compile') {
-      return res.status(400).json(result);
-    }
-
-    return res.status(500).json(result);
-  }
-
-  const result = await executeNativeC(payload);
+  const result = await startExecution(payload);
 
   if (result.success) {
+    // Interactive sessions return 202 with sessionId
+    if (result.sessionId) {
+      return res.status(202).json(result);
+    }
+    // Non-interactive returns 200 with full result
     return res.json(result);
   }
 
-  if (result.phase === 'runtime-discovery' || result.error?.code === 'RUNTIME_MISSING') {
+  if (result.error?.code === 'INFRASTRUCTURE_ERROR') {
     return res.status(503).json(result);
   }
 
   if (result.phase === 'validation') {
     return res.status(400).json(result);
+  }
+
+  if (result.phase === 'concurrency') {
+    return res.status(429).json(result);
   }
 
   if (result.phase === 'compile') {
@@ -1034,7 +1031,7 @@ app.post('/api/execute', async (req, res) => {
 
 app.get('/api/execute/:sessionId/events', (req, res) => {
   const { sessionId } = req.params;
-  const session = interactiveSessions.get(sessionId);
+  const session = getEventStream(sessionId);
 
   if (!session) {
     return res.status(404).json({
@@ -1065,65 +1062,37 @@ app.get('/api/execute/:sessionId/events', (req, res) => {
 
 app.post('/api/execute/:sessionId/input', async (req, res) => {
   const { sessionId } = req.params;
-  const session = interactiveSessions.get(sessionId);
-
-  if (!session) {
-    return res.status(404).json({
-      success: false,
-      error: {
-        code: 'SESSION_NOT_FOUND',
-        message: 'Interactive execution session not found.',
-      },
-    });
-  }
-
   const input = typeof req.body?.input === 'string' ? req.body.input : '';
   const eof = Boolean(req.body?.eof);
 
-  if (eof) {
-    try {
-      if (session.child.stdin && !session.child.stdin.destroyed) {
-        session.child.stdin.end();
-      }
-    } catch {
-      // Ignore close failures.
+  const result = handleInput(sessionId, input, eof);
+
+  if (!result.success) {
+    if (result.error?.code === 'SESSION_NOT_FOUND') {
+      return res.status(404).json(result);
     }
-  } else if (input && session.child.stdin && !session.child.stdin.destroyed) {
-    try {
-      session.child.stdin.write(input);
-    } catch (error) {
-      return res.status(500).json({
-        success: false,
-        error: {
-          code: 'STDIN_WRITE_FAILED',
-          message: error instanceof Error ? error.message : String(error),
-        },
-      });
-    }
+    return res.status(500).json(result);
   }
 
-  return res.json({ success: true });
+  return res.json(result);
 });
 
 app.post('/api/execute/:sessionId/stop', async (req, res) => {
   const { sessionId } = req.params;
-  const session = interactiveSessions.get(sessionId);
+  const result = stopSession(sessionId);
 
-  if (!session) {
-    return res.status(404).json({
-      success: false,
-      error: {
-        code: 'SESSION_NOT_FOUND',
-        message: 'Interactive execution session not found.',
-      },
-    });
+  if (!result.success) {
+    if (result.error?.code === 'SESSION_NOT_FOUND') {
+      return res.status(404).json(result);
+    }
+    return res.status(500).json(result);
   }
 
-  session.manualStop = true;
-  terminateProcessTree(session.child);
-
-  return res.json({ success: true });
+  return res.json(result);
 });
+
+const serviceStatus = getServiceStatus();
+console.log('Execution Service Status:', JSON.stringify(serviceStatus, null, 2));
 
 const gccCheck = detectGcc();
 if (!gccCheck.available) {

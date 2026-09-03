@@ -212,11 +212,8 @@ async function handleInteractive(args: string[]) {
     }
   });
 
-  interactiveProcess.on?.('close', () => {
-    console.log('\nProcess ended.');
-    rl.close();
-    global.process.exit(0);
-  });
+  // Note: InteractiveProcess doesn't have event emitter interface
+  // Process exit is handled by the CLI when user types 'exit' or Ctrl+C
 }
 
 function handleStatus() {
@@ -226,13 +223,10 @@ function handleStatus() {
   console.log(`Isolate Available: ${hasIsolate ? 'Yes' : 'No (development mode)'}`);
   console.log(`Platform: ${process.platform}`);
   console.log(`Node Version: ${process.version}`);
-  
-  const cExecutor = executionManager['cExecutor'];
-  const pythonExecutor = executionManager['pythonExecutor'];
-  
-  console.log(`\nC Executor: ${cExecutor ? cExecutor.getDescription() : 'Not available'}`);
-  console.log(`Python Executor: ${pythonExecutor ? pythonExecutor.getDescription() : 'Not available'}`);
-  
+
+  const envInfo = executionManager.getEnvironmentInfo();
+  console.log(`\nAvailable Languages: ${envInfo.availableLanguages.join(', ')}`);
+
   console.log('--- End Status ---\n');
 }
 

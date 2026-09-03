@@ -2,11 +2,12 @@
   "name": "@forgebytex/execution-core",
   "version": "1.0.0",
   "description": "Native execution engine for ForgeByteX with Isolate sandboxing",
-  "main": "index.ts",
+  "main": "index.js",
   "type": "module",
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.cjs",
-    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.cjs --watch"
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.cjs --watch",
+    "build": "tsc"
   },
   "dependencies": {
     "@types/node": "^20.0.0"

@@ -382,11 +382,14 @@ async function startNonInteractiveSession(sessionId, requestId, executionRequest
 
   const result = await executionManager.execute(executionRequest, {
     onStatus: (status) => {
-      // Status updates for non-interactive (not streamed)
+      console.log(`[Execution Status] ${status}`);
     },
   });
 
   activeExecutions.delete(sessionId);
+
+  console.log(`[Execution Result] success=${result.success}, status=${result.status}, phase=${result.phase}`);
+  console.log(`[Execution Output] stdout="${result.stdout}", stderr="${result.stderr}", diagnostics="${result.diagnostics}"`);
 
   return {
     success: result.success,
@@ -395,7 +398,7 @@ async function startNonInteractiveSession(sessionId, requestId, executionRequest
     phase: result.phase,
     stdout: result.stdout,
     stderr: result.stderr,
-    error: result.diagnostics,
+    error: result.diagnostics || result.stderr,
     warnings: result.warnings,
     exitCode: result.exitCode,
     status: mapStatus(result.status),
