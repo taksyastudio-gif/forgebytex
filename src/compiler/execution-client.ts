@@ -83,8 +83,7 @@ type PendingRequest = {
  * wrappers around this class.
  */
 export class ExecutionClient {
-  private readonly workerUrl: URL;
-  private readonly workerOptions: WorkerOptions;
+  private readonly workerFactory: () => Worker;
 
   private worker: Worker | null = null;
   private pendingRequests = new Map<string, PendingRequest>();
@@ -92,11 +91,9 @@ export class ExecutionClient {
   private activeRequestId: string | null = null;
 
   constructor(
-    workerModule: () => URL,
-    workerOptions: WorkerOptions = { type: 'module' }
+    workerFactory: () => Worker
   ) {
-    this.workerUrl = workerModule();
-    this.workerOptions = workerOptions;
+    this.workerFactory = workerFactory;
   }
 
   /* ============================================================
@@ -104,7 +101,7 @@ export class ExecutionClient {
      ============================================================ */
 
   private createWorker(): Worker {
-    const worker = new Worker(this.workerUrl, this.workerOptions);
+    const worker = this.workerFactory();
 
     worker.addEventListener('message', this.handleMessage);
     worker.addEventListener('error', this.handleWorkerError);

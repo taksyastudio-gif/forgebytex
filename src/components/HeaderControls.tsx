@@ -180,7 +180,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
               type="button"
               onClick={onRun}
               aria-label="Run code"
-              className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-emerald-500 active:scale-95 cursor-pointer"
+              className="flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-emerald-600 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               <Play size={13} fill="currentColor" />
               <span>Run Code</span>
@@ -190,7 +190,7 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
               type="button"
               onClick={onRun}
               aria-label="Stop execution"
-              className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-red-500 active:scale-95 cursor-pointer"
+              className="flex items-center gap-2 rounded-lg bg-red-700 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-red-600 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               <Square size={12} fill="currentColor" />
               <span>Stop Execution</span>

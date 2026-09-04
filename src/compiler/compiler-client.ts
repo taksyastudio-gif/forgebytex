@@ -1,4 +1,5 @@
 import { ExecutionClient } from './execution-client';
+import CompilerWorker from './compiler.worker?worker';
 
 export type {
   CompileResult,
@@ -95,8 +96,7 @@ class CompilerClientFacade {
 
   constructor() {
     this.inner = new ExecutionClient(
-      () => new URL('./compiler.worker.ts', import.meta.url),
-      { type: 'module' }
+      () => new CompilerWorker()
     );
   }
 

@@ -446,10 +446,11 @@ export class CExecutor implements LanguageExecutor {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       
-      if (stdin) {
+      // Ensure stdin is properly closed. Close even if stdin is an empty string.
+      if (stdin !== undefined) {
         process.stdin.write(stdin);
-        process.stdin.end();
       }
+      process.stdin.end();
       
       process.stdout.on('data', (data) => {
         const chunk = data.toString();

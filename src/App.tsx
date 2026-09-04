@@ -7,7 +7,9 @@ import React, {
 
 import { HeaderControls } from './components/HeaderControls';
 import { FileExplorer } from './components/FileExplorer';
-import { CodeEditor } from './components/CodeEditor';
+import { EditorSkeleton } from './components/EditorSkeleton';
+
+const CodeEditor = React.lazy(() => import('./components/CodeEditor'));
 import {
   interpretCompilerOutput,
   interpretPythonError,
@@ -1087,7 +1089,7 @@ export const App: React.FC = () => {
           MAIN WORKSPACE
       ======================================================== */}
 
-      <div className="flex-1 flex overflow-hidden w-full h-full relative">
+      <main className="flex-1 flex overflow-hidden w-full h-full relative">
 
         {/* ======================================================
             FILE EXPLORER
@@ -1115,16 +1117,18 @@ export const App: React.FC = () => {
             {/* TOP: CODE EDITOR */}
             <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
               {activeFile ? (
-                <CodeEditor
-                  code={activeFile.content}
-                  language={activeFile.language}
-                  theme={activeTheme}
-                  files={files}
-                  activeFileId={activeFileId}
-                  onSelectFile={handleFileSelect}
-                  onChange={handleCodeChange}
-                  onMount={handleEditorMount}
-                />
+                <React.Suspense fallback={<EditorSkeleton />}>
+                  <CodeEditor
+                    code={activeFile.content}
+                    language={activeFile.language}
+                    theme={activeTheme}
+                    files={files}
+                    activeFileId={activeFileId}
+                    onSelectFile={handleFileSelect}
+                    onChange={handleCodeChange}
+                    onMount={handleEditorMount}
+                  />
+                </React.Suspense>
               ) : (
                 <div className="flex-1 flex items-center justify-center text-muted text-sm">
                   No file selected.
@@ -1201,16 +1205,18 @@ export const App: React.FC = () => {
             {/* LEFT: CODE EDITOR */}
             <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
               {activeFile ? (
-                <CodeEditor
-                  code={activeFile.content}
-                  language={activeFile.language}
-                  theme={activeTheme}
-                  files={files}
-                  activeFileId={activeFileId}
-                  onSelectFile={handleFileSelect}
-                  onChange={handleCodeChange}
-                  onMount={handleEditorMount}
-                />
+                <React.Suspense fallback={<EditorSkeleton />}>
+                  <CodeEditor
+                    code={activeFile.content}
+                    language={activeFile.language}
+                    theme={activeTheme}
+                    files={files}
+                    activeFileId={activeFileId}
+                    onSelectFile={handleFileSelect}
+                    onChange={handleCodeChange}
+                    onMount={handleEditorMount}
+                  />
+                </React.Suspense>
               ) : (
                 <div className="flex-1 flex items-center justify-center text-muted text-sm">
                   No file selected.
@@ -1282,7 +1288,7 @@ export const App: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
+      </main>
 
       <NebCurriculumModal
         isOpen={isNebModalOpen}

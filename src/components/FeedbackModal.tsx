@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Bug, Lightbulb, Heart, Send, X, Loader2, CheckCircle2 } from 'lucide-react';
 import type { EditorTheme, SupportedLanguage } from '../types/byteplay';
+import { submitUserFeedback, type FeedbackSubmission } from '../lib/supabase';
 
 type FeedbackType = 'bug' | 'suggestion' | 'feedback';
 
@@ -19,15 +20,6 @@ const FEEDBACK_TYPES: Array<{ value: FeedbackType; label: string; icon: React.Re
 
 const APP_VERSION = '0.0.0';
 const MAX_MESSAGE_LENGTH = 5000;
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '');
-
-interface FeedbackPayload {
-  type: FeedbackType;
-  message: string;
-  theme: EditorTheme;
-  language: SupportedLanguage;
-  app_version: string;
-}
 
 export const FeedbackModal: React.FC<FeedbackModalProps> = ({
   isOpen,
@@ -48,38 +40,25 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     }
   }, []);
 
-  const submitFeedback = async (payload: FeedbackPayload) => {
-    const response = await fetch(`${BACKEND_URL}/api/feedback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const result = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(result?.error || 'Failed to submit feedback');
-    }
-  };
-
   if (!isOpen) return null;
 
   const handleSubmit = async () => {
     const trimmedMessage = message.trim();
 
     if (!trimmedMessage) {
-      setError('Please enter a message');
+      setError('Please enter a message.');
       return;
     }
 
     if (trimmedMessage.length > MAX_MESSAGE_LENGTH) {
-      setError(`Please keep your message under ${MAX_MESSAGE_LENGTH} characters`);
+      setError(`Please keep your message under ${MAX_MESSAGE_LENGTH} characters.`);
       return;
     }
 
     setIsSubmitting(true);
     setError(null);
 
-    const payload: FeedbackPayload = {
+    const payload: FeedbackSubmission = {
       type: selectedType,
       message: trimmedMessage,
       theme: currentTheme,
@@ -88,7 +67,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
     };
 
     try {
-      await submitFeedback(payload);
+      await submitUserFeedback(payload);
 
       setIsSuccess(true);
       setMessage('');
@@ -99,7 +78,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
         onClose();
       }, 2000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit feedback');
+      setError(err instanceof Error ? err.message : 'Failed to submit feedback.');
     } finally {
       setIsSubmitting(false);
     }

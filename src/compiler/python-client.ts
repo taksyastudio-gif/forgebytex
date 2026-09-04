@@ -1,4 +1,5 @@
 import { ExecutionClient } from './execution-client';
+import PythonWorker from './python.worker?worker';
 import type {
   ExecutionPhase,
   ExecutionResult,
@@ -95,8 +96,7 @@ class PythonClientFacade {
 
   constructor() {
     this.inner = new ExecutionClient(
-      () => new URL('./python.worker.ts', import.meta.url),
-      { type: 'module' }
+      () => new PythonWorker()
     );
   }
 
