@@ -1,21 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
+  Download,
+  FilePlus2,
   Maximize2,
-  Minimize2,
+  MessageSquare,
   Play,
   RotateCcw,
   Square,
   Trash2,
   TriangleAlert,
-  FilePlus2,
-  Download,
-  MessageSquare,
+  Minimize2,
 } from 'lucide-react';
+import { useEffect, useRef, useState, type FC } from 'react';
 
 import type {
-  SupportedLanguage,
   EditorTheme,
+  SupportedLanguage,
 } from '../types/byteplay';
 
 interface HeaderControlsProps {
@@ -30,71 +30,67 @@ interface HeaderControlsProps {
   onNewFile: () => void;
   onExport: () => void;
 
-  onLanguageSelect: (lang: SupportedLanguage) => void;
+  onLanguageSelect: (language: SupportedLanguage) => void;
   onThemeSelect: (theme: EditorTheme) => void;
+
   isFocusMode: boolean;
   onToggleFocusMode: () => void;
   onFeedbackClick: () => void;
 }
 
-type LanguageOption = {
+interface LanguageOption {
   id: SupportedLanguage;
   label: string;
   shortLabel: string;
   subtitle: string;
   status: 'LIVE' | 'SOON';
-};
+}
 
 const PRIMARY_LANGUAGES: LanguageOption[] = [
   {
     id: 'c',
     label: 'C Language',
     shortLabel: 'C',
-    subtitle: 'Native GCC WebAssembly',
+    subtitle: 'Native browser WebAssembly compiler',
+    status: 'LIVE',
+  },
+  {
+    id: 'cpp',
+    label: 'C++ Language',
+    shortLabel: 'C++',
+    subtitle: 'Native browser WebAssembly compiler',
     status: 'LIVE',
   },
   {
     id: 'python',
     label: 'Python 3',
     shortLabel: 'PYTHON',
-    subtitle: 'Pyodide 3.11 with REPL Stdin',
+    subtitle: 'Pyodide with interactive stdin',
     status: 'LIVE',
   },
   {
     id: 'html',
     label: 'HTML Web Project',
-    shortLabel: 'WEB (HTML)',
-    subtitle: 'HTML5, CSS & JS Sandbox',
+    shortLabel: 'WEB',
+    subtitle: 'HTML, CSS and JavaScript sandbox',
     status: 'LIVE',
   },
   {
     id: 'plaintext',
     label: 'Plain Text',
     shortLabel: 'TXT',
-    subtitle: 'Text Notes & Scratches',
+    subtitle: 'Notes and scratch files',
     status: 'LIVE',
   },
 ];
 
-const THEMES: Array<{
-  id: EditorTheme;
-  label: string;
-}> = [
-  {
-    id: 'black',
-    label: 'Black',
-  },
-  {
-    id: 'white',
-    label: 'White',
-  },
-  {
-    id: 'cyberpunk',
-    label: 'Cyberpunk',
-  },
+const THEMES: Array<{ id: EditorTheme; label: string }> = [
+  { id: 'black', label: 'Black' },
+  { id: 'white', label: 'White' },
+  { id: 'cyberpunk', label: 'Cyberpunk' },
 ];
 
-export const HeaderControls: React.FC<HeaderControlsProps> = ({
+export const HeaderControls: FC<HeaderControlsProps> = ({
   activeLanguage,
   activeTheme,
   isRunning,
@@ -110,234 +106,280 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
   onToggleFocusMode,
   onFeedbackClick,
 }) => {
-  const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false);
-  const languageMenuRef = useRef<HTMLDivElement>(null);
+  const [isLanguageMenuOpen, setIsLanguageMenuOpen] =
+    useState(false);
 
-  // Close dropdown when clicking outside
+  const languageMenuRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
+    const handlePointerDown = (event: MouseEvent): void => {
+      const target = event.target;
+
       if (
         languageMenuRef.current &&
-        !languageMenuRef.current.contains(event.target as Node)
+        target instanceof Node &&
+        !languageMenuRef.current.contains(target)
       ) {
-        setIsLangDropdownOpen(false);
+        setIsLanguageMenuOpen(false);
       }
     };
+
     document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
+
+    return () => {
+      document.removeEventListener(
+        'mousedown',
+        handlePointerDown,
+      );
+    };
   }, []);
 
-  // Close dropdown with Escape key
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
-        setIsLangDropdownOpen(false);
+        setIsLanguageMenuOpen(false);
       }
     };
+
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
-  // Map active language (including css/js) to primary representation
-  const displayLanguageId =
-    activeLanguage === 'css' || activeLanguage === 'javascript'
+  const displayLanguage =
+    activeLanguage === 'css' ||
+    activeLanguage === 'javascript'
       ? 'html'
       : activeLanguage;
 
-  const activeOption =
-    PRIMARY_LANGUAGES.find((lang) => lang.id === displayLanguageId) ??
-    PRIMARY_LANGUAGES[0];
+  const activeLanguageOption =
+    PRIMARY_LANGUAGES.find(
+      (language) => language.id === displayLanguage,
+    ) ?? PRIMARY_LANGUAGES[0];
 
   return (
     <header className="app-header z-30 flex w-full shrink-0 select-none flex-col border-b border-theme bg-surface">
-      <div className="main-header-row flex h-13 w-full items-center justify-between gap-3 px-4">
-        {/* BRANDING & IDENTITY */}
-        <div className="brand-block flex items-center gap-2.5 shrink-0">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-sm overflow-hidden">
-            <img src="/favicon.svg" alt="ForgeByteX" className="w-6 h-6" />
+      <div className="main-header-row flex min-h-[52px] w-full items-center justify-between gap-3 px-3 sm:px-4">
+        <div className="brand-block flex min-w-0 shrink-0 items-center gap-2.5">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-indigo-600 text-white shadow-sm">
+            <img
+              alt="ForgeByteX"
+              className="h-6 w-6"
+              src="/favicon.svg"
+            />
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="flex flex-col">
-              <span className="text-base font-bold tracking-tight text-primary font-sans leading-tight">
-                forgebyteX
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-bold leading-tight tracking-tight text-primary sm:text-base">
+                ForgeByteX
               </span>
-              <span className="text-[10px] text-muted font-sans leading-tight">
+              <span className="hidden text-[10px] leading-tight text-muted sm:block">
                 by TAKSYA STUDIO
               </span>
             </div>
-            <span className="rounded bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-indigo-400 uppercase tracking-wide">
-              PRO
+
+            <span className="hidden rounded border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-indigo-400 md:inline">
+              Browser IDE
             </span>
           </div>
         </div>
 
-        {/* CENTER / PRIMARY ACTIONS */}
-        <div className="flex items-center gap-2">
-          {/* RUN CODE BUTTON */}
-          {!isRunning ? (
-            <button
-              type="button"
-              onClick={onRun}
-              aria-label="Run code"
-              className="flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-emerald-600 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <Play size={13} fill="currentColor" />
-              <span>Run Code</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onRun}
-              aria-label="Stop execution"
-              className="flex items-center gap-2 rounded-lg bg-red-700 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-red-600 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <Square size={12} fill="currentColor" />
-              <span>Stop Execution</span>
-            </button>
-          )}
-
-          {/* SECONDARY ACTION BUTTONS */}
+        <div className="flex min-w-0 items-center justify-center gap-1.5 sm:gap-2">
           <button
+            aria-label={
+              isRunning ? 'Stop execution' : 'Run code'
+            }
+            className={[
+              'flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4',
+              isRunning
+                ? 'bg-red-700 hover:bg-red-600 focus-visible:ring-red-500'
+                : 'bg-emerald-700 hover:bg-emerald-600 focus-visible:ring-emerald-500',
+            ].join(' ')}
+            onClick={onRun}
             type="button"
-            onClick={onClear}
-            aria-label="Clear terminal"
-            title="Clear terminal"
-            className="flex items-center gap-1.5 rounded-lg border border-theme bg-surface-soft px-3 py-1.5 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-primary cursor-pointer"
           >
-            <Trash2 size={13} />
+            {isRunning ? (
+              <Square
+                aria-hidden="true"
+                fill="currentColor"
+                size={12}
+              />
+            ) : (
+              <Play
+                aria-hidden="true"
+                fill="currentColor"
+                size={13}
+              />
+            )}
+
+            <span className="hidden sm:inline">
+              {isRunning ? 'Stop Execution' : 'Run Code'}
+            </span>
+          </button>
+
+          <button
+            aria-label="Clear terminal"
+            className="secondary-action flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium sm:px-3"
+            onClick={onClear}
+            title="Clear terminal"
+            type="button"
+          >
+            <Trash2 aria-hidden="true" size={13} />
             <span className="hidden sm:inline">Clear</span>
           </button>
 
           <button
-            type="button"
-            onClick={onReset}
             aria-label="Reset workspace"
+            className="secondary-action flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium sm:px-3"
+            onClick={onReset}
             title="Reset workspace"
-            className="flex items-center gap-1.5 rounded-lg border border-theme bg-surface-soft px-3 py-1.5 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-primary cursor-pointer"
+            type="button"
           >
-            <RotateCcw size={13} />
+            <RotateCcw aria-hidden="true" size={13} />
             <span className="hidden sm:inline">Reset</span>
           </button>
 
           <button
-            type="button"
+            aria-label="Load debugging sample"
+            className="secondary-action hidden items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium text-amber-500/90 hover:bg-amber-500/10 md:flex"
             onClick={onBuggySample}
-            aria-label="Load sample bug"
-            title="Load sample bug"
-            className="flex items-center gap-1.5 rounded-lg border border-theme bg-surface-soft px-3 py-1.5 text-xs font-medium text-amber-500/90 transition-colors hover:bg-amber-500/10 cursor-pointer"
+            title="Load sample with an intentional error"
+            type="button"
           >
-            <TriangleAlert size={13} />
-            <span className="hidden sm:inline">Sample Bug</span>
+            <TriangleAlert aria-hidden="true" size={13} />
+            <span>Sample Bug</span>
           </button>
 
-          <div className="h-4 w-[1px] bg-theme mx-1 hidden md:block" />
+          <span
+            aria-hidden="true"
+            className="mx-1 hidden h-4 w-px bg-[var(--border)] md:block"
+          />
 
           <button
-            type="button"
-            onClick={onNewFile}
             aria-label="Create new file"
-            className="hidden md:flex items-center gap-1.5 rounded-lg border border-theme bg-surface-soft px-3 py-1.5 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-primary cursor-pointer"
+            className="secondary-action hidden items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium md:flex"
+            onClick={onNewFile}
+            type="button"
           >
-            <FilePlus2 size={13} />
+            <FilePlus2 aria-hidden="true" size={13} />
             <span>New File</span>
           </button>
 
           <button
-            type="button"
+            aria-label="Export project"
+            className="secondary-action hidden items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium md:flex"
             onClick={onExport}
-            aria-label="Export code"
-            className="hidden md:flex items-center gap-1.5 rounded-lg border border-theme bg-surface-soft px-3 py-1.5 text-xs font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-primary cursor-pointer"
+            type="button"
           >
-            <Download size={13} />
+            <Download aria-hidden="true" size={13} />
             <span>Export</span>
           </button>
         </div>
 
-        {/* RIGHT CONTROLS: LANGUAGE & THEME */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* FEEDBACK BUTTON */}
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <button
-            type="button"
-            onClick={onFeedbackClick}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-theme bg-surface-soft text-secondary transition-colors hover:bg-surface-raised hover:text-primary cursor-pointer"
             aria-label="Send feedback"
+            className="secondary-action flex h-8 w-8 items-center justify-center rounded-lg border"
+            onClick={onFeedbackClick}
             title="Feedback"
+            type="button"
           >
-            <MessageSquare size={14} />
+            <MessageSquare aria-hidden="true" size={14} />
           </button>
 
-          {/* PRIMARY LANGUAGE SELECTOR DROPDOWN */}
-          <div ref={languageMenuRef} className="relative">
+          <div
+            className="relative"
+            ref={languageMenuRef}
+          >
             <button
-              type="button"
-              onClick={() => setIsLangDropdownOpen((prev) => !prev)}
+              aria-expanded={isLanguageMenuOpen}
               aria-haspopup="menu"
-              aria-expanded={isLangDropdownOpen}
               aria-label="Select programming language"
-              className="flex items-center gap-2 rounded-lg border border-theme bg-surface-soft px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-surface-raised cursor-pointer"
+              className="secondary-action flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold sm:gap-2 sm:px-3"
+              onClick={() =>
+                setIsLanguageMenuOpen((current) => !current)
+              }
+              type="button"
             >
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              <span className="uppercase">{activeOption.shortLabel}</span>
+              <span
+                aria-hidden="true"
+                className="h-2 w-2 rounded-full bg-emerald-500"
+              />
+              <span className="uppercase">
+                {activeLanguageOption.shortLabel}
+              </span>
               <ChevronDown
+                aria-hidden="true"
+                className={[
+                  'transition-transform',
+                  isLanguageMenuOpen ? 'rotate-180' : '',
+                ].join(' ')}
                 size={14}
-                className={`transition-transform duration-200 ${
-                  isLangDropdownOpen ? 'rotate-180' : ''
-                }`}
               />
             </button>
 
-            {isLangDropdownOpen && (
+            {isLanguageMenuOpen ? (
               <div
+                aria-label="Language modes"
+                className="absolute right-0 top-full z-50 mt-1.5 w-64 overflow-hidden rounded-xl border border-theme bg-surface py-1 shadow-xl"
                 role="menu"
-                className="absolute right-0 top-full z-50 mt-1.5 w-64 overflow-hidden rounded-xl border border-theme bg-surface shadow-xl py-1"
               >
-                <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted border-b border-theme">
+                <div className="border-b border-theme px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted">
                   Select Language Mode
                 </div>
-                {PRIMARY_LANGUAGES.map((lang) => {
-                  const isActive = displayLanguageId === lang.id;
+
+                {PRIMARY_LANGUAGES.map((language) => {
+                  const isActive =
+                    displayLanguage === language.id;
+
                   return (
                     <button
-                      key={lang.id}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        onLanguageSelect(lang.id);
-                        setIsLangDropdownOpen(false);
-                      }}
                       className={[
-                        'flex w-full flex-col px-3.5 py-2 text-left text-xs transition-colors cursor-pointer',
+                        'flex w-full flex-col border-l-2 px-3.5 py-2 text-left text-xs transition-colors',
                         isActive
-                          ? 'bg-indigo-600/15 border-l-2 border-indigo-500 font-semibold text-indigo-400'
-                          : 'border-l-2 border-transparent text-secondary hover:bg-surface-raised hover:text-primary',
+                          ? 'border-indigo-500 bg-indigo-600/15 font-semibold text-indigo-400'
+                          : 'border-transparent text-secondary hover:bg-surface-raised hover:text-primary',
                       ].join(' ')}
+                      key={language.id}
+                      onClick={() => {
+                        onLanguageSelect(language.id);
+                        setIsLanguageMenuOpen(false);
+                      }}
+                      role="menuitem"
+                      type="button"
                     >
-                      <div className="flex items-center justify-between">
+                      <span className="flex items-center justify-between">
                         <span className="font-semibold text-primary">
-                          {lang.label}
+                          {language.label}
                         </span>
-                        <span className="text-[10px] font-mono text-muted uppercase">
-                          {lang.shortLabel}
+                        <span className="font-mono text-[10px] uppercase text-muted">
+                          {language.shortLabel}
                         </span>
-                      </div>
-                      <span className="text-[11px] text-muted font-normal mt-0.5">
-                        {lang.subtitle}
+                      </span>
+
+                      <span className="mt-0.5 text-[11px] font-normal text-muted">
+                        {language.subtitle}
                       </span>
                     </button>
                   );
                 })}
               </div>
-            )}
+            ) : null}
           </div>
 
-          {/* THEME SELECTOR */}
-          <div className="relative">
+          <div className="relative hidden sm:block">
             <select
-              value={activeTheme}
-              onChange={(e) => onThemeSelect(e.target.value as EditorTheme)}
               aria-label="Application theme"
-              className="appearance-none rounded-lg border border-theme bg-surface-soft px-3 py-1.5 pr-7 text-xs font-medium text-primary outline-none transition-colors hover:bg-surface-raised cursor-pointer"
+              className="secondary-action appearance-none rounded-lg border bg-surface-soft px-3 py-1.5 pr-7 text-xs font-medium text-primary outline-none"
+              onChange={(event) =>
+                onThemeSelect(
+                  event.target.value as EditorTheme,
+                )
+              }
+              value={activeTheme}
             >
               {THEMES.map((theme) => (
                 <option key={theme.id} value={theme.id}>
@@ -345,23 +387,48 @@ export const HeaderControls: React.FC<HeaderControlsProps> = ({
                 </option>
               ))}
             </select>
+
             <ChevronDown
-              size={13}
+              aria-hidden="true"
               className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-muted"
+              size={13}
             />
           </div>
 
-          {/* FOCUS MODE TOGGLE */}
           <button
-            type="button"
+            aria-label={
+              isFocusMode
+                ? 'Exit focus mode'
+                : 'Enter focus mode'
+            }
+            className="secondary-action flex h-8 w-8 items-center justify-center rounded-lg border"
             onClick={onToggleFocusMode}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-theme bg-surface-soft text-secondary transition-colors hover:bg-surface-raised hover:text-primary cursor-pointer"
-            aria-label={isFocusMode ? 'Exit focus mode' : 'Focus mode'}
-            title={isFocusMode ? 'Exit focus mode' : 'Focus mode'}
+            title={
+              isFocusMode
+                ? 'Exit focus mode'
+                : 'Focus mode'
+            }
+            type="button"
           >
-            {isFocusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            {isFocusMode ? (
+              <Minimize2 aria-hidden="true" size={14} />
+            ) : (
+              <Maximize2 aria-hidden="true" size={14} />
+            )}
           </button>
         </div>
+      </div>
+
+      <div className="flex items-center justify-between border-t border-theme px-3 py-1 text-[10px] text-muted sm:px-4">
+        <span>
+          {isRunning
+            ? 'Execution active'
+            : 'Browser-native development environment'}
+        </span>
+
+        <span className="hidden sm:inline">
+          F5 to run
+        </span>
       </div>
     </header>
   );

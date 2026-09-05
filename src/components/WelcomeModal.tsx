@@ -1,4 +1,4 @@
-import React from 'react';
+import { useEffect, type FC, type MouseEvent } from 'react';
 import { X } from 'lucide-react';
 
 interface WelcomeModalProps {
@@ -8,61 +8,101 @@ interface WelcomeModalProps {
 
 const WELCOME_DISMISSED_KEY = 'forgebytex-welcome-dismissed';
 
-export const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
-  if (!isOpen) return null;
+const dismissWelcome = (): void => {
+  window.localStorage.setItem(WELCOME_DISMISSED_KEY, 'true');
+};
 
-  const handleStartCoding = () => {
-    localStorage.setItem(WELCOME_DISMISSED_KEY, 'true');
+export const WelcomeModal: FC<WelcomeModalProps> = ({ isOpen, onClose }) => {
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        dismissWelcome();
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  const handleDismiss = (): void => {
+    dismissWelcome();
     onClose();
   };
 
-  const handleClose = () => {
-    localStorage.setItem(WELCOME_DISMISSED_KEY, 'true');
-    onClose();
+  const handleBackdropClick = (event: MouseEvent<HTMLDivElement>): void => {
+    if (event.target === event.currentTarget) {
+      handleDismiss();
+    }
   };
 
   return (
-    <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="modal-panel w-[min(450px,95%)] rounded-xl p-6 shadow-2xl border bg-surface">
-        <div className="flex items-start justify-between mb-4">
+    <div
+      aria-labelledby="welcome-modal-title"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onMouseDown={handleBackdropClick}
+      role="dialog"
+    >
+      <div className="modal-panel w-full max-w-[450px] rounded-xl border p-6 shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-sm overflow-hidden">
-              <img src="/favicon.svg" alt="ForgeByteX" className="w-6 h-6" />
+            <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-indigo-600 shadow-sm">
+              <img
+                alt="ForgeByteX"
+                className="h-6 w-6"
+                src="/favicon.svg"
+              />
             </div>
+
             <div>
-              <h2 className="text-lg font-bold text-primary">Welcome to ForgeByteX</h2>
+              <h2
+                className="text-lg font-bold text-primary"
+                id="welcome-modal-title"
+              >
+                Welcome to ForgeByteX
+              </h2>
               <p className="text-xs text-muted">by TAKSYA STUDIO</p>
             </div>
           </div>
+
           <button
-            onClick={handleClose}
-            className="text-secondary hover:text-primary transition-colors"
-            aria-label="Close"
+            aria-label="Close welcome dialog"
+            className="icon-action rounded-md p-1.5"
+            onClick={handleDismiss}
+            type="button"
           >
             <X size={18} />
           </button>
         </div>
 
-        <div className="mb-6">
-          <p className="text-sm text-secondary leading-relaxed">
-            ForgeByteX is a powerful web-based code editor supporting C, Python, HTML, CSS, and JavaScript. 
-            Built for developers who need a clean, fast coding environment.
-          </p>
-          <div className="mt-4 flex items-center gap-2 text-xs text-muted">
-            <span>Made with modern web technologies by TAKSYA STUDIO</span>
-          </div>
-        </div>
+        <p className="mb-6 text-sm leading-relaxed text-secondary">
+          ForgeByteX is a free browser-based workspace for writing and running
+          C, C++, Python, HTML, CSS, and JavaScript. Your code runs locally in
+          your browser whenever the selected language supports it.
+        </p>
 
-        <div className="flex gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row">
           <button
-            onClick={handleStartCoding}
-            className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-indigo-500 active:scale-95 cursor-pointer"
+            className="primary-action flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold"
+            onClick={handleDismiss}
+            type="button"
           >
-            <span>Start Coding</span>
+            Start coding
           </button>
+
           <button
-            onClick={handleClose}
-            className="flex-1 rounded-lg border border-theme bg-surface-soft px-4 py-2.5 text-sm font-medium text-secondary transition-colors hover:bg-surface-raised hover:text-primary cursor-pointer"
+            className="secondary-action flex-1 rounded-lg px-4 py-2.5 text-sm font-medium"
+            onClick={handleDismiss}
+            type="button"
           >
             Close
           </button>
@@ -74,8 +114,11 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({ isOpen, onClose }) =
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const shouldShowWelcome = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  return !localStorage.getItem(WELCOME_DISMISSED_KEY);
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.localStorage.getItem(WELCOME_DISMISSED_KEY) !== 'true';
 };
 
 export default WelcomeModal;

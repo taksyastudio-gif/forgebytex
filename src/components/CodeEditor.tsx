@@ -1,18 +1,53 @@
-import React from 'react';
+import { useCallback, type FC } from 'react';
 import Editor from '@monaco-editor/react';
 import type * as monaco from 'monaco-editor';
-import { FileCode2, Globe2, FileText, File } from 'lucide-react';
+import {
+  File,
+  FileCode2,
+  FileText,
+  Globe2,
+} from 'lucide-react';
 
+import EditorSkeleton from './EditorSkeleton';
 import type {
-  SupportedLanguage,
   EditorTheme,
   FileItem,
+  SupportedLanguage,
 } from '../types/byteplay';
 
+interface CodeEditorProps {
+  code: string;
+  language: SupportedLanguage;
+  theme: EditorTheme;
+  files?: FileItem[];
+  activeFileId?: string;
+  onSelectFile?: (id: string) => void;
+  onChange: (value: string) => void;
+  onFocus?: () => void;
+  onMount?: (
+    editor: monaco.editor.IStandaloneCodeEditor,
+    monacoInstance: typeof monaco,
+  ) => void;
+}
+
+const MONACO_LANGUAGE_MAP: Record<SupportedLanguage, string> = {
+  c: 'c',
+  cpp: 'cpp',
+  html: 'html',
+  python: 'python',
+  css: 'css',
+  javascript: 'javascript',
+  sql: 'sql',
+  plaintext: 'plaintext',
+};
+
 const registerMonacoThemes = (
-  monacoInstance: typeof monaco
-) => {
-  const themes: Record<EditorTheme, monaco.editor.IStandaloneThemeData> = {
+  monacoInstance: typeof monaco,
+): void => {
+  const themes: Record<
+    EditorTheme,
+    monaco.editor.IStandaloneThemeData
+  > = {
     black: {
       base: 'vs-dark',
       inherit: true,
@@ -63,69 +98,73 @@ const registerMonacoThemes = (
     },
   };
 
-  for (const [themeName, themeData] of Object.entries(themes) as Array<[EditorTheme, monaco.editor.IStandaloneThemeData]>) {
+  for (const [themeName, themeData] of Object.entries(themes)) {
     monacoInstance.editor.defineTheme(themeName, themeData);
   }
 };
 
-interface CodeEditorProps {
-  code: string;
-  language: SupportedLanguage;
-  theme: EditorTheme;
-  files?: FileItem[];
-  activeFileId?: string;
-  onSelectFile?: (id: string) => void;
-  onChange: (value: string) => void;
-  onFocus?: () => void;
-  onMount?: (
-    editor: monaco.editor.IStandaloneCodeEditor,
-    monacoInstance: typeof monaco
-  ) => void;
-}
-
-const MONACO_LANGUAGE_MAP: Record<
-  SupportedLanguage,
-  string
-> = {
-  c: 'c',
-  html: 'html',
-  python: 'python',
-  css: 'css',
-  javascript: 'javascript',
-  sql: 'sql',
-  plaintext: 'plaintext',
-};
-
-const FileTabIcon: React.FC<{ language: SupportedLanguage }> = ({ language }) => {
+const FileTabIcon: FC<{ language: SupportedLanguage }> = ({
+  language,
+}) => {
   switch (language) {
     case 'c':
-      return <FileCode2 size={13} className="text-blue-400 shrink-0" />;
+    case 'cpp':
+      return (
+        <FileCode2
+          aria-hidden="true"
+          className="shrink-0 text-blue-400"
+          size={13}
+        />
+      );
+
     case 'html':
-      return <Globe2 size={13} className="text-orange-400 shrink-0" />;
+      return (
+        <Globe2
+          aria-hidden="true"
+          className="shrink-0 text-orange-400"
+          size={13}
+        />
+      );
+
     case 'css':
-      return <FileCode2 size={13} className="text-pink-400 shrink-0" />;
+      return (
+        <FileCode2
+          aria-hidden="true"
+          className="shrink-0 text-pink-400"
+          size={13}
+        />
+      );
+
     case 'javascript':
-      return <FileCode2 size={13} className="text-yellow-400 shrink-0" />;
+      return (
+        <FileCode2
+          aria-hidden="true"
+          className="shrink-0 text-yellow-400"
+          size={13}
+        />
+      );
+
     case 'python':
-      return <FileText size={13} className="text-emerald-400 shrink-0" />;
+      return (
+        <FileText
+          aria-hidden="true"
+          className="shrink-0 text-emerald-400"
+          size={13}
+        />
+      );
+
     default:
-      return <File size={13} className="text-muted shrink-0" />;
+      return (
+        <File
+          aria-hidden="true"
+          className="shrink-0 text-slate-500"
+          size={13}
+        />
+      );
   }
 };
 
-export const EditorSkeleton: React.FC = () => (
-  <div className="code-editor-frame relative flex h-full min-h-[250px] sm:min-h-[300px] w-full flex-1 flex-col overflow-hidden bg-editor-bg">
-    <div className="flex items-center h-9 px-2 border-b border-theme bg-surface shrink-0 gap-1 animate-pulse">
-      <div className="h-5 w-20 bg-surface-soft rounded" />
-      <div className="h-5 w-20 bg-surface-soft rounded" />
-    </div>
-    <div className="flex-1 min-h-0 relative w-full h-full flex items-center justify-center text-muted text-xs font-mono">
-      <span>Loading editor…</span>
-    </div>
-  </div>
-);
-
-export const CodeEditor: React.FC<CodeEditorProps> = ({
+export const CodeEditor: FC<CodeEditorProps> = ({
   code,
   language,
   theme,
@@ -136,113 +175,126 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   onFocus,
   onMount,
 }) => {
+  const handleBeforeMount = useCallback(
+    (monacoInstance: typeof monaco): void => {
+      registerMonacoThemes(monacoInstance);
+    },
+    [],
+  );
+
+  const handleMount = useCallback(
+    (
+      editor: monaco.editor.IStandaloneCodeEditor,
+      monacoInstance: typeof monaco,
+    ): void => {
+      editor.onDidFocusEditorText(() => {
+        onFocus?.();
+      });
+
+      onMount?.(editor, monacoInstance);
+    },
+    [onFocus, onMount],
+  );
+
   return (
-    <div className="code-editor-frame relative flex h-full min-h-[250px] sm:min-h-[300px] w-full flex-1 flex-col overflow-hidden bg-editor-bg">
-      {/* FILE TABS BAR */}
-      {files.length > 0 && (
-        <div className="editor-tabs-bar flex items-center h-9 px-2 border-b border-theme bg-surface shrink-0 select-none overflow-x-auto gap-1">
+    <div className="code-editor-frame relative flex h-full min-h-[250px] w-full flex-1 flex-col overflow-hidden bg-editor-bg sm:min-h-[300px]">
+      {files.length > 0 ? (
+        <div
+          aria-label="Open files"
+          className="editor-tabs-bar flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-theme bg-surface px-2 select-none"
+          role="tablist"
+        >
           {files.map((file) => {
-            const isActive = activeFileId === file.id;
+            const isActive = file.id === activeFileId;
+
             return (
               <button
-                key={file.id}
-                type="button"
-                onClick={() => onSelectFile?.(file.id)}
+                aria-selected={isActive}
                 className={[
-                  'flex items-center gap-2 px-3 py-1 text-xs font-mono rounded-t-md transition-colors border-t-2 cursor-pointer',
+                  'flex items-center gap-2 rounded-t-md border-t-2 px-3 py-1 text-xs font-mono transition-colors',
                   isActive
-                    ? 'bg-editor-bg text-primary border-indigo-500 font-semibold shadow-sm'
-                    : 'border-transparent text-muted hover:text-secondary hover:bg-surface-soft',
+                    ? 'border-indigo-500 bg-editor-bg font-semibold text-primary shadow-sm'
+                    : 'border-transparent text-muted hover:bg-surface-raised hover:text-primary',
                 ].join(' ')}
+                key={file.id}
+                onClick={() => onSelectFile?.(file.id)}
+                role="tab"
+                type="button"
               >
                 <FileTabIcon language={file.language} />
-                <span>{file.name}</span>
+                <span className="max-w-48 truncate">{file.name}</span>
               </button>
             );
           })}
         </div>
-      )}
+      ) : null}
 
-      {/* MONACO EDITOR */}
-      <div className="flex-1 min-h-0 relative w-full h-full">
+      <div className="relative h-full min-h-0 w-full flex-1">
         <Editor
+          beforeMount={handleBeforeMount}
           height="100%"
-          width="100%"
           language={MONACO_LANGUAGE_MAP[language]}
-          theme={theme}
-          beforeMount={(monacoInstance) => {
-            registerMonacoThemes(monacoInstance as typeof monaco);
-          }}
-          value={code}
-          onMount={(editor, monacoInstance) => {
-            editor.onDidFocusEditorText(() => {
-              onFocus?.();
-            });
-
-            if (onMount) onMount(editor, monacoInstance as unknown as typeof monaco);
-          }}
+          loading={<EditorSkeleton />}
           onChange={(value) => onChange(value ?? '')}
+          onMount={handleMount}
           options={{
-            automaticLayout: true,
-            minimap: {
-              enabled: false,
-            },
-            scrollBeyondLastLine: false,
-            scrollbar: {
-              verticalScrollbarSize: 10,
-              horizontalScrollbarSize: 10,
-              alwaysConsumeMouseWheel: false,
-            },
-            fontSize: 14,
-            fontFamily:
-              "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
-            fontLigatures: true,
-            lineHeight: 22,
-            lineNumbers: 'on',
-            lineNumbersMinChars: 3,
-            glyphMargin: false,
-            folding: true,
-            foldingHighlight: true,
-            showFoldingControls: 'mouseover',
-            lineDecorationsWidth: 10,
-            tabSize: 2,
-            insertSpaces: true,
-            detectIndentation: true,
-            trimAutoWhitespace: true,
-            autoIndent: 'full',
-            formatOnPaste: false,
-            formatOnType: false,
-            quickSuggestions: true,
-            suggestOnTriggerCharacters: true,
+            accessibilitySupport: 'auto',
             acceptSuggestionOnEnter: 'on',
-            tabCompletion: 'on',
-            parameterHints: {
-              enabled: true,
-            },
+            automaticLayout: true,
+            autoClosingBrackets: 'languageDefined',
+            autoClosingQuotes: 'languageDefined',
+            autoIndent: 'full',
             bracketPairColorization: {
               enabled: true,
             },
-            matchBrackets: 'always',
-            autoClosingBrackets: 'languageDefined',
-            autoClosingQuotes: 'languageDefined',
             cursorBlinking: 'smooth',
             cursorSmoothCaretAnimation: 'on',
-            smoothScrolling: true,
-            mouseWheelZoom: true,
-            wordWrap: 'off',
-            renderWhitespace: 'selection',
-            renderControlCharacters: false,
-            links: true,
-            find: {
-              addExtraSpaceOnTop: false,
-              autoFindInSelection: 'never',
-            },
-            accessibilitySupport: 'auto',
+            detectIndentation: true,
+            folding: true,
+            foldingHighlight: true,
+            fontFamily:
+              "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+            fontLigatures: true,
+            fontSize: 14,
+            formatOnPaste: false,
+            formatOnType: false,
+            glyphMargin: false,
             largeFileOptimizations: true,
+            lineDecorationsWidth: 10,
+            lineHeight: 22,
+            lineNumbers: 'on',
+            lineNumbersMinChars: 3,
+            matchBrackets: 'always',
+            minimap: {
+              enabled: false,
+            },
+            mouseWheelZoom: true,
+            parameterHints: {
+              enabled: true,
+            },
+            quickSuggestions: true,
+            renderControlCharacters: false,
+            renderWhitespace: 'selection',
+            scrollBeyondLastLine: false,
+            scrollbar: {
+              alwaysConsumeMouseWheel: false,
+              horizontalScrollbarSize: 10,
+              verticalScrollbarSize: 10,
+            },
+            showFoldingControls: 'mouseover',
+            smoothScrolling: true,
             stickyScroll: {
               enabled: true,
             },
+            suggestOnTriggerCharacters: true,
+            tabCompletion: 'on',
+            tabSize: 2,
+            trimAutoWhitespace: true,
+            wordWrap: 'off',
           }}
+          theme={theme}
+          value={code}
+          width="100%"
         />
       </div>
     </div>

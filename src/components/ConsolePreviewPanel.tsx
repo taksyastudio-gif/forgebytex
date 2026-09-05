@@ -1,50 +1,119 @@
-import React from 'react';
-import { ArrowDownToLine, ArrowRightToLine } from 'lucide-react';
+import {
+  ArrowDownToLine,
+  ArrowRightToLine,
+  CircleAlert,
+  Trash2,
+} from 'lucide-react';
+import type { FC } from 'react';
 
+import { FriendlyErrorPanel } from './FriendlyErrorPanel';
 import { InteractiveTerminal } from './InteractiveTerminal';
+import { buildWebPreview } from '../utils/webPreview';
 
-import type { SupportedLanguage, EditorTheme, TerminalPosition } from '../types/byteplay';
+import type {
+  EditorTheme,
+  FileItem,
+  SupportedLanguage,
+  TerminalPosition,
+} from '../types/byteplay';
 import type { ExecutionStatus } from '../compiler/execution-protocol';
 
 interface ConsolePreviewPanelProps {
   activeLanguage: SupportedLanguage;
   activeTheme?: EditorTheme;
+  files: FileItem[];
+  webEntryPoint?: string;
   terminalLogs: string[];
-  htmlPreviewDoc: string | null;
+  htmlPreviewDoc?: string | null;
+
+  errorOutput?: string;
+  errorFileName?: string;
+  onJumpToError?: (line: number, column: number) => void;
+  onClearError?: () => void;
+
   onSendInput: (input: string) => void;
   onClearTerminal: () => void;
   isWaitingForInput?: boolean;
   executionStatus: ExecutionStatus;
   clearGeneration: number;
   terminalPosition: TerminalPosition;
-  onTerminalPositionChange: (position: TerminalPosition) => void;
+  onTerminalPositionChange: (
+    position: TerminalPosition,
+  ) => void;
 }
 
 const STATUS_CONFIG: Record<
   ExecutionStatus,
   { label: string; color: string }
 > = {
-  idle:          { label: 'Ready',      color: 'text-muted' },
-  preparing:     { label: 'Preparing…', color: 'text-cyan-400' },
-  compiling:     { label: 'Compiling…', color: 'text-cyan-400' },
-  running:       { label: 'Running…',   color: 'text-emerald-400' },
-  'waiting-input': { label: 'Waiting for input', color: 'text-amber-400 font-bold animate-pulse' },
-  completed:     { label: 'Completed',  color: 'text-emerald-400' },
-  failed:        { label: 'Failed',     color: 'text-red-400' },
-  stopped:       { label: 'Stopped',    color: 'text-muted' },
-  timeout:       { label: 'Timed out', color: 'text-orange-400' },
-  'memory-limit': { label: 'Memory limit exceeded', color: 'text-orange-400' },
-  'output-limit': { label: 'Output limit exceeded', color: 'text-orange-400' },
-  'process-limit': { label: 'Process limit exceeded', color: 'text-orange-400' },
-  'sandbox-error': { label: 'Sandbox error', color: 'text-red-400' },
-  'infrastructure-error': { label: 'Infrastructure error', color: 'text-red-400' },
+  idle: { label: 'Ready', color: 'text-muted' },
+  preparing: {
+    label: 'Preparing...',
+    color: 'text-cyan-400',
+  },
+  compiling: {
+    label: 'Compiling...',
+    color: 'text-cyan-400',
+  },
+  running: {
+    label: 'Running...',
+    color: 'text-emerald-400',
+  },
+  'waiting-input': {
+    label: 'Waiting for input',
+    color: 'font-bold text-amber-400 animate-pulse',
+  },
+  completed: {
+    label: 'Completed',
+    color: 'text-emerald-400',
+  },
+  failed: {
+    label: 'Failed',
+    color: 'text-red-400',
+  },
+  stopped: {
+    label: 'Stopped',
+    color: 'text-muted',
+  },
+  timeout: {
+    label: 'Timed out',
+    color: 'text-orange-400',
+  },
+  'memory-limit': {
+    label: 'Memory limit exceeded',
+    color: 'text-orange-400',
+  },
+  'output-limit': {
+    label: 'Output limit exceeded',
+    color: 'text-orange-400',
+  },
+  'process-limit': {
+    label: 'Process limit exceeded',
+    color: 'text-orange-400',
+  },
+  'sandbox-error': {
+    label: 'Sandbox error',
+    color: 'text-red-400',
+  },
+  'infrastructure-error': {
+    label: 'Infrastructure error',
+    color: 'text-red-400',
+  },
 };
 
-export const ConsolePreviewPanel: React.FC<ConsolePreviewPanelProps> = ({
+export const ConsolePreviewPanel: FC<
+  ConsolePreviewPanelProps
+> = ({
   activeLanguage,
   activeTheme = 'black',
+  files,
+  webEntryPoint,
   terminalLogs,
-  htmlPreviewDoc,
+  htmlPreviewDoc = null,
+  errorOutput = '',
+  errorFileName,
+  onJumpToError,
+  onClearError,
   onSendInput,
   onClearTerminal,
   isWaitingForInput = false,
@@ -53,90 +122,181 @@ export const ConsolePreviewPanel: React.FC<ConsolePreviewPanelProps> = ({
   terminalPosition,
   onTerminalPositionChange,
 }) => {
-  const isHtml =
+  const isWebPreview =
     activeLanguage === 'html' ||
     activeLanguage === 'css' ||
     activeLanguage === 'javascript';
-  const { label: statusLabel, color: statusColor } = STATUS_CONFIG[executionStatus];
+
+  const status = STATUS_CONFIG[executionStatus];
+
+  const preview = isWebPreview
+    ? buildWebPreview(files, webEntryPoint)
+    : null;
+
+  const documentToRender =
+    htmlPreviewDoc || preview?.document || null;
+
+  const nextPosition =
+    terminalPosition === 'bottom' ? 'right' : 'bottom';
 
   return (
-    <div className="console-panel w-full h-full flex flex-col font-mono text-xs min-w-0 bg-surface border-t border-theme">
-
-      {/* ── Panel header ──────────────────────────────────────────────── */}
-      <div className="console-panel-header flex items-center justify-between px-3.5 h-9 border-b border-theme shrink-0 select-none bg-surface">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <span className="text-emerald-400 font-bold text-xs" aria-hidden="true">&gt;_</span>
-          <span className="text-xs font-semibold uppercase tracking-wider font-sans text-primary truncate">
-            {isHtml ? 'Live Web Preview' : 'Interactive Terminal'}
+    <section className="console-panel flex h-full min-w-0 flex-col border-t border-theme bg-surface font-mono text-xs">
+      <header className="console-panel-header flex h-9 shrink-0 items-center justify-between border-b border-theme px-3.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span
+            aria-hidden="true"
+            className={[
+              'font-bold',
+              isWebPreview
+                ? 'text-orange-400'
+                : 'text-emerald-400',
+            ].join(' ')}
+          >
+            {isWebPreview ? '◉' : '>_'}
           </span>
-          {!isHtml && (
-            <span className={`text-[11px] font-mono ${statusColor} ml-1`}>
-              • {statusLabel}
+
+          <span className="truncate font-sans text-xs font-semibold uppercase tracking-wider text-primary">
+            {isWebPreview
+              ? 'Live Web Preview'
+              : 'Interactive Terminal'}
+          </span>
+
+          {!isWebPreview ? (
+            <span
+              className={[
+                'ml-1 text-[11px]',
+                status.color,
+              ].join(' ')}
+              role="status"
+            >
+              • {status.label}
             </span>
-          )}
+          ) : preview?.entryFileName ? (
+            <span className="hidden truncate text-[10px] text-muted sm:inline">
+              • {preview.entryFileName}
+            </span>
+          ) : null}
         </div>
 
-        <div className="flex items-center gap-1">
-          {!isHtml && (
+        <div className="flex shrink-0 items-center gap-1">
+          {!isWebPreview ? (
             <button
+              aria-label={`Move terminal to the ${nextPosition} panel`}
+              className="icon-action rounded p-1"
+              onClick={() =>
+                onTerminalPositionChange(nextPosition)
+              }
+              title={`Move terminal to ${nextPosition}`}
               type="button"
-              onClick={() => onTerminalPositionChange(terminalPosition === 'bottom' ? 'right' : 'bottom')}
-              className="p-1 text-muted hover:text-primary hover:bg-surface-raised rounded transition-colors cursor-pointer"
-              title={`Switch to ${terminalPosition === 'bottom' ? 'right' : 'bottom'} panel`}
-              aria-label={`Switch to ${terminalPosition === 'bottom' ? 'right' : 'bottom'} panel`}
             >
               {terminalPosition === 'bottom' ? (
-                <ArrowRightToLine size={14} />
+                <ArrowRightToLine
+                  aria-hidden="true"
+                  size={14}
+                />
               ) : (
-                <ArrowDownToLine size={14} />
+                <ArrowDownToLine
+                  aria-hidden="true"
+                  size={14}
+                />
               )}
             </button>
-          )}
+          ) : null}
+
           <button
-            type="button"
+            aria-label={
+              isWebPreview
+                ? 'Clear web preview'
+                : 'Clear terminal'
+            }
+            className="icon-action rounded p-1 hover:text-red-400"
             onClick={onClearTerminal}
-            className="p-1 text-muted hover:text-red-400 hover:bg-surface-raised rounded transition-colors cursor-pointer"
-            title={isHtml ? 'Clear preview' : 'Clear terminal'}
-            aria-label={isHtml ? 'Clear preview' : 'Clear terminal'}
+            title={
+              isWebPreview
+                ? 'Clear web preview'
+                : 'Clear terminal'
+            }
+            type="button"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6" />
-              <path d="M19 6l-1 14H6L5 6" />
-              <path d="M10 11v6M14 11v6" />
-              <path d="M9 6V4h6v2" />
-            </svg>
+            <Trash2 aria-hidden="true" size={14} />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* ── Main content area ─────────────────────────────────────────── */}
-      {isHtml ? (
-        <div className="flex-1 min-h-0 bg-white relative">
-          {htmlPreviewDoc ? (
+      {isWebPreview ? (
+        <div className="relative min-h-0 flex-1 bg-white">
+          {documentToRender ? (
             <iframe
-              title="HTML Sandbox"
-              srcDoc={htmlPreviewDoc}
-              className="w-full h-full border-0"
+              className="h-full w-full border-0"
+              referrerPolicy="no-referrer"
               sandbox="allow-scripts allow-modals"
+              srcDoc={documentToRender}
+              title="ForgeByteX web project preview"
             />
           ) : (
-            <div className="h-full flex items-center justify-center p-4 text-slate-400 text-xs italic bg-inherit">
-              Press &quot;Run Code&quot; to preview HTML.
+            <div className="flex h-full items-center justify-center bg-slate-950 p-4 text-center text-xs italic text-slate-400">
+              <p>
+                Create an <code>index.html</code> file and press
+                “Run Code” to render the web project.
+              </p>
             </div>
           )}
+
+          {preview && preview.diagnostics.length > 0 ? (
+            <div
+              aria-label="Web preview diagnostics"
+              className="absolute bottom-3 left-3 right-3 max-h-32 overflow-y-auto rounded-lg border border-amber-500/30 bg-slate-950/95 p-2 text-[11px] text-amber-200 shadow-lg"
+              role="status"
+            >
+              <div className="mb-1 flex items-center gap-1.5 font-semibold text-amber-300">
+                <CircleAlert
+                  aria-hidden="true"
+                  size={13}
+                />
+                <span>Preview diagnostics</span>
+              </div>
+
+              <div className="space-y-1">
+                {preview.diagnostics.map((diagnostic) => (
+                  <p
+                    key={`${diagnostic.fileName}:${diagnostic.message}`}
+                  >
+                    <span className="font-semibold">
+                      {diagnostic.fileName}:
+                    </span>{' '}
+                    {diagnostic.message}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <InteractiveTerminal
-            terminalLogs={terminalLogs}
-            isWaitingForInput={isWaitingForInput}
-            onInput={onSendInput}
-            clearGeneration={clearGeneration}
-            theme={activeTheme}
-          />
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {errorOutput.trim() ? (
+            <div className="min-h-0 max-h-[58%] shrink-0 overflow-y-auto border-b border-theme px-2 pt-2">
+              <FriendlyErrorPanel
+                fileName={errorFileName}
+                language={activeLanguage}
+                onClear={onClearError}
+                onJumpToError={onJumpToError}
+                rawError={errorOutput}
+              />
+            </div>
+          ) : null}
+
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <InteractiveTerminal
+              clearGeneration={clearGeneration}
+              isWaitingForInput={isWaitingForInput}
+              onInput={onSendInput}
+              terminalLogs={terminalLogs}
+              theme={activeTheme}
+            />
+          </div>
         </div>
       )}
-    </div>
+    </section>
   );
 };
 

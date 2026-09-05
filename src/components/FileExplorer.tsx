@@ -1,137 +1,257 @@
-import React from 'react';
 import {
-  ChevronLeft,
-  ChevronRight,
+  useEffect,
+  useRef,
+  useState,
+  type FC,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
+import {
   FileCode2,
   FileText,
   Globe2,
-  Database,
-  File,
-  FolderGit2,
+  Pencil,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 
-import type { FileItem } from '../types/byteplay';
+import type { SupportedLanguage } from '../types/byteplay';
 
-interface FileExplorerProps {
-  files: FileItem[];
-  activeFileId: string;
-  onSelectFile: (id: string) => void;
-  isCollapsed: boolean;
-  onToggleCollapse: () => void;
+export interface ProjectFile {
+  id: string;
+  name: string;
+  language: SupportedLanguage;
+  content: string;
 }
 
-const FileIcon: React.FC<{
-  language: FileItem['language'];
-}> = ({ language }) => {
-  switch (language) {
-    case 'c':
-      return <FileCode2 size={14} className="text-blue-400 shrink-0" />;
-    case 'html':
-      return <Globe2 size={14} className="text-orange-400 shrink-0" />;
-    case 'css':
-      return <FileCode2 size={14} className="text-pink-400 shrink-0" />;
-    case 'javascript':
-      return <FileCode2 size={14} className="text-yellow-400 shrink-0" />;
-    case 'python':
-      return <FileText size={14} className="text-emerald-400 shrink-0" />;
-    case 'sql':
-      return <Database size={14} className="text-purple-400 shrink-0" />;
-    case 'plaintext':
-    default:
-      return <File size={14} className="text-muted shrink-0" />;
-  }
-};
+interface FileExplorerProps {
+  files: ProjectFile[];
+  activeFileId: string;
+  onSelectFile: (id: string) => void;
+  onAddFile: () => void;
+  onRenameFile: (id: string, newName: string) => void;
+  onDeleteFile: (id: string) => void;
+}
 
-export const FileExplorer: React.FC<FileExplorerProps> = ({
+export const FileExplorer: FC<FileExplorerProps> = ({
   files,
   activeFileId,
   onSelectFile,
-  isCollapsed,
-  onToggleCollapse,
+  onAddFile,
+  onRenameFile,
+  onDeleteFile,
 }) => {
-  const webFiles = files.filter(
-    (f) => f.language === 'html' || f.language === 'css' || f.language === 'javascript'
-  );
-  const otherFiles = files.filter(
-    (f) => f.language !== 'html' && f.language !== 'css' && f.language !== 'javascript'
-  );
+  const [editingFileId, setEditingFileId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const renderFileRow = (file: FileItem) => {
-    const isActive = activeFileId === file.id;
+  useEffect(() => {
+    if (editingFileId) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editingFileId]);
 
-    return (
-      <button
-        type="button"
-        key={file.id}
-        onClick={() => onSelectFile(file.id)}
-        title={isCollapsed ? file.name : undefined}
-        className={[
-          'w-full text-left px-3 py-1.5 text-xs font-mono flex items-center gap-2.5 transition-colors cursor-pointer',
-          isActive
-            ? 'bg-indigo-600/15 text-indigo-400 border-l-2 border-indigo-500 font-semibold'
-            : 'border-l-2 border-transparent text-secondary hover:bg-surface-raised hover:text-primary',
-        ].join(' ')}
-      >
-        <FileIcon language={file.language} />
-        {!isCollapsed && <span className="truncate">{file.name}</span>}
-      </button>
-    );
+  const cancelEditing = (): void => {
+    setEditingFileId(null);
+    setDraftName('');
+  };
+
+  const saveName = (fileId: string): void => {
+    const nextName = draftName.trim();
+
+    if (nextName) {
+      onRenameFile(fileId, nextName);
+    }
+
+    cancelEditing();
+  };
+
+  const startEditing = (
+    file: ProjectFile,
+    event: MouseEvent<HTMLButtonElement | HTMLSpanElement>,
+  ): void => {
+    event.stopPropagation();
+    setEditingFileId(file.id);
+    setDraftName(file.name);
+  };
+
+  const handleEditKeyDown = (
+    fileId: string,
+    event: KeyboardEvent<HTMLInputElement>,
+  ): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveName(fileId);
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelEditing();
+    }
   };
 
   return (
-    <aside
-      className={[
-        'app-sidebar border-r border-theme bg-surface flex flex-col transition-[width] duration-200 select-none shrink-0',
-        isCollapsed ? 'w-12' : 'w-56',
-      ].join(' ')}
-    >
-      <div className="h-10 px-3 border-b border-theme flex items-center justify-between text-xs font-semibold text-muted tracking-wider font-sans">
-        {!isCollapsed && (
-          <div className="flex items-center gap-1.5 truncate">
-            <FolderGit2 size={14} className="text-indigo-400" />
-            <span className="truncate uppercase text-[11px]">EXPLORER</span>
-          </div>
-        )}
+    <aside className="app-sidebar flex h-full w-full flex-col border-r border-theme bg-surface text-secondary select-none">
+      <div className="flex items-center justify-between border-b border-theme p-3">
+        <div>
+          <h2 className="text-xs font-bold uppercase tracking-wider text-muted">
+            Explorer
+          </h2>
+          <p className="mt-1 text-[10px] text-muted">
+            {files.length} file{files.length === 1 ? '' : 's'}
+          </p>
+        </div>
 
         <button
+          aria-label="Create new file"
+          className="primary-action flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold"
+          onClick={onAddFile}
+          title="Create new file"
           type="button"
-          onClick={onToggleCollapse}
-          className="p-1 hover:bg-surface-raised rounded text-muted hover:text-primary transition-colors ml-auto cursor-pointer"
-          title={isCollapsed ? 'Expand Explorer' : 'Collapse Explorer'}
-          aria-label={isCollapsed ? 'Expand Explorer' : 'Collapse Explorer'}
         >
-          {isCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          <Plus aria-hidden="true" size={13} />
+          New
         </button>
       </div>
 
-      <div className="flex-1 py-2 overflow-y-auto">
-        {/* WEB PROJECT GROUP */}
-        {webFiles.length > 0 && (
-          <div className="mb-3">
-            {!isCollapsed && (
-              <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted font-sans flex items-center justify-between">
-                <span>WEB PROJECT</span>
-                <span className="text-[9px] text-indigo-400 font-normal">HTML / CSS / JS</span>
-              </div>
-            )}
-            {webFiles.map(renderFileRow)}
-          </div>
-        )}
+      <div
+        aria-label="Project files"
+        className="min-h-0 flex-1 overflow-y-auto py-2"
+        role="listbox"
+      >
+        {files.length === 0 ? (
+          <p className="px-3 py-6 text-center text-xs italic text-muted">
+            No files in this project.
+          </p>
+        ) : (
+          files.map((file) => {
+            const isActive = file.id === activeFileId;
+            const isEditing = file.id === editingFileId;
 
-        {/* OTHER FILES / PROGRAMS GROUP */}
-        {otherFiles.length > 0 && (
-          <div>
-            {!isCollapsed && (
-              <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted font-sans">
-                {webFiles.length > 0 ? 'STANDALONE SCRIPTS' : 'WORKSPACE FILES'}
+            return (
+              <div
+                aria-selected={isActive}
+                className={[
+                  'group flex min-h-9 items-center justify-between border-l-2 px-3 py-1.5 text-xs transition-colors',
+                  isActive
+                    ? 'border-blue-500 bg-surface-raised font-medium text-blue-400'
+                    : 'border-transparent text-muted hover:bg-surface-raised hover:text-primary',
+                ].join(' ')}
+                key={file.id}
+                onClick={() => onSelectFile(file.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelectFile(file.id);
+                  }
+                }}
+                role="option"
+                tabIndex={0}
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
+                  <FileIcon language={file.language} />
+
+                  {isEditing ? (
+                    <input
+                      aria-label={`Rename ${file.name}`}
+                      className="input-field w-full rounded border px-1 py-0.5 text-xs outline-none"
+                      onBlur={() => saveName(file.id)}
+                      onChange={(event) => setDraftName(event.target.value)}
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) =>
+                        handleEditKeyDown(file.id, event)
+                      }
+                      ref={inputRef}
+                      type="text"
+                      value={draftName}
+                    />
+                  ) : (
+                    <span
+                      className="truncate"
+                      onDoubleClick={(event) => startEditing(file, event)}
+                      title={file.name}
+                    >
+                      {file.name}
+                    </span>
+                  )}
+                </div>
+
+                {!isEditing ? (
+                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    <button
+                      aria-label={`Rename ${file.name}`}
+                      className="icon-action rounded p-1"
+                      onClick={(event) => startEditing(file, event)}
+                      title={`Rename ${file.name}`}
+                      type="button"
+                    >
+                      <Pencil aria-hidden="true" size={13} />
+                    </button>
+
+                    <button
+                      aria-label={`Delete ${file.name}`}
+                      className="icon-action danger rounded p-1"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteFile(file.id);
+                      }}
+                      title={`Delete ${file.name}`}
+                      type="button"
+                    >
+                      <Trash2 aria-hidden="true" size={13} />
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            )}
-            {otherFiles.map(renderFileRow)}
-          </div>
+            );
+          })
         )}
       </div>
     </aside>
   );
+};
+
+const FileIcon: FC<{ language: SupportedLanguage }> = ({ language }) => {
+  switch (language) {
+    case 'c':
+    case 'cpp':
+      return (
+        <FileCode2
+          aria-hidden="true"
+          className="shrink-0 text-blue-400"
+          size={14}
+        />
+      );
+
+    case 'html':
+      return (
+        <Globe2
+          aria-hidden="true"
+          className="shrink-0 text-orange-400"
+          size={14}
+        />
+      );
+
+    case 'python':
+      return (
+        <FileText
+          aria-hidden="true"
+          className="shrink-0 text-emerald-400"
+          size={14}
+        />
+      );
+
+    default:
+      return (
+        <FileCode2
+          aria-hidden="true"
+          className="shrink-0 text-slate-500"
+          size={14}
+        />
+      );
+  }
 };
 
 export default FileExplorer;

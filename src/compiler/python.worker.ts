@@ -5,61 +5,36 @@ import type {
   RuntimeEvent,
   RuntimeRequest,
 } from './execution-protocol';
+import type { loadPyodide } from 'pyodide';
 
-// Load the Pyodide assets served from public/pyodide.
-const PYODIDE_BASE = '/pyodide/';
-
-type LoadPyodideFn = typeof import('pyodide').loadPyodide;
-type PyodideRuntime = Awaited<ReturnType<LoadPyodideFn>>;
-
-let loadPyodideFunc: LoadPyodideFn | null = null;
-let pyodideRuntimePromise: Promise<PyodideRuntime> | null = null;
-
-const getLoadPyodide = async (): Promise<LoadPyodideFn> => {
-  if (loadPyodideFunc) return loadPyodideFunc;
-
-  const response = await fetch(`${PYODIDE_BASE}pyodide.mjs`);
-  if (!response.ok) {
-    throw new Error(`Unable to load local Pyodide (${response.status})`);
-  }
-
-  const pyodideUrl = URL.createObjectURL(
-    new Blob([await response.text()], { type: 'text/javascript' })
-  );
-
-  let pyodideModule: { loadPyodide: LoadPyodideFn };
-  try {
-    pyodideModule = (await import(
-      /* @vite-ignore */ pyodideUrl
-    )) as { loadPyodide: LoadPyodideFn };
-  } finally {
-    URL.revokeObjectURL(pyodideUrl);
-  }
-
-  loadPyodideFunc = pyodideModule.loadPyodide;
-  return loadPyodideFunc;
-};
-
-const getPyodideRuntime = async (): Promise<PyodideRuntime> => {
-  if (!pyodideRuntimePromise) {
-    // Cache the initialized runtime so repeated runs reuse the same Pyodide
-    // instance after the local asset bundle has been loaded.
-    pyodideRuntimePromise = (async () => {
-      const loadFn = await getLoadPyodide();
-
-      return loadFn({
-        indexURL: PYODIDE_BASE,
-      });
-    })().catch((error) => {
-      pyodideRuntimePromise = null;
-      throw error;
-    });
-  }
-
-  return pyodideRuntimePromise;
-};
-
+const PYODIDE_BASE_URL = '/pyodide/';
 const STDIN_REQUIRED_MARKER = '__FORGEBYTEX_STDIN_REQUIRED__';
+
+type LoadPyodide = typeof loadPyodide;
+type PyodideRuntime = Awaited<ReturnType<LoadPyodide>>;
+
+interface ExecutionSession {
+  code: string;
+  stdin: string;
+  stdinBuffer?: SharedArrayBuffer;
+  attempt: number;
+}
+
+interface PythonRunResult {
+  success: boolean;
+  output: string;
+  error?: string;
+  exitCode?: number | null;
+  waitingForInput?: boolean;
+  status: ExecutionStatus;
+  phase: ExecutionPhase;
+}
+
+let loadPyodideFunction: LoadPyodide | null = null;
+let pyodidePromise: Promise<PyodideRuntime> | null = null;
+let executionQueue: Promise<void> = Promise.resolve();
+
+const executionSessions = new Map<string, ExecutionSession>();
 
 class StdinRequiredError extends Error {
   constructor() {
@@ -68,16 +43,93 @@ class StdinRequiredError extends Error {
   }
 }
 
-type Session = {
-  code: string;
-  stdin: string;
-  stdinBuffer: SharedArrayBuffer | null;
-  attempt: number;
+const postEvent = (event: RuntimeEvent): void => {
+  self.postMessage(event);
 };
 
-const executionSessions = new Map<string, Session>();
+const postStatus = (
+  requestId: string,
+  status: ExecutionStatus,
+  attempt: number,
+): void => {
+  postEvent({
+    type: 'status',
+    requestId,
+    status,
+    attempt,
+  });
+};
 
-let executionChain: Promise<void> = Promise.resolve();
+const postStream = (
+  requestId: string,
+  stream: OutputStream,
+  text: string,
+  attempt: number,
+): void => {
+  if (!text) {
+    return;
+  }
+
+  postEvent({
+    type: 'stream',
+    requestId,
+    stream,
+    text,
+    attempt,
+  });
+};
+
+const enqueueExecution = (task: () => Promise<void>): void => {
+  executionQueue = executionQueue.then(task, task);
+};
+
+const getLoadPyodide = async (): Promise<LoadPyodide> => {
+  if (loadPyodideFunction) {
+    return loadPyodideFunction;
+  }
+
+  const response = await fetch(`${PYODIDE_BASE_URL}pyodide.mjs`);
+
+  if (!response.ok) {
+    throw new Error(
+      `Unable to load local Pyodide runtime (${response.status}).`,
+    );
+  }
+
+  const source = await response.text();
+  const moduleUrl = URL.createObjectURL(
+    new Blob([source], { type: 'text/javascript' }),
+  );
+
+  try {
+    const module = (await import(
+      /* @vite-ignore */
+      moduleUrl
+    )) as { loadPyodide: LoadPyodide };
+
+    loadPyodideFunction = module.loadPyodide;
+    return loadPyodideFunction;
+  } finally {
+    URL.revokeObjectURL(moduleUrl);
+  }
+};
+
+const getPyodideRuntime = async (): Promise<PyodideRuntime> => {
+  if (!pyodidePromise) {
+    pyodidePromise = (async () => {
+      const loadPyodide = await getLoadPyodide();
+
+      return loadPyodide({
+        indexURL: PYODIDE_BASE_URL,
+      });
+    })().catch((error: unknown) => {
+      pyodidePromise = null;
+      throw error;
+    });
+  }
+
+  return pyodidePromise;
+};
 
 class SharedStdinReader {
   private readonly control: Int32Array;
@@ -89,26 +141,36 @@ class SharedStdinReader {
     this.data = new Uint8Array(buffer, 16);
   }
 
-  readLine(): string {
+  public readLine(): string {
     while (true) {
-      const writeIndex = Atomics.load(this.control, 0);
-      const readIndex = Atomics.load(this.control, 1);
+      const writePosition = Atomics.load(this.control, 0);
+      const readPosition = Atomics.load(this.control, 1);
 
-      for (let index = readIndex; index < writeIndex; index += 1) {
+      for (
+        let index = readPosition;
+        index < writePosition;
+        index += 1
+      ) {
         if (this.data[index] !== 10) {
           continue;
         }
 
-        const line = this.decoder.decode(this.data.slice(readIndex, index));
+        const line = this.decoder.decode(
+          this.data.slice(readPosition, index),
+        );
+
         Atomics.store(this.control, 1, index + 1);
         return line;
       }
 
       if (Atomics.load(this.control, 2) === 1) {
-        if (readIndex < writeIndex) {
-          const line = this.decoder.decode(this.data.slice(readIndex, writeIndex));
-          Atomics.store(this.control, 1, writeIndex);
-          return line;
+        if (readPosition < writePosition) {
+          const remaining = this.decoder.decode(
+            this.data.slice(readPosition, writePosition),
+          );
+
+          Atomics.store(this.control, 1, writePosition);
+          return remaining;
         }
 
         return '';
@@ -120,230 +182,134 @@ class SharedStdinReader {
   }
 }
 
-const enqueueExecution = (task: () => Promise<void>): void => {
-  executionChain = executionChain.then(task, task);
-};
-
-async function runPython(
-  code: string,
+const runPython = async (
   requestId: string,
-  attempt: number,
-  session: Session
-): Promise<{
-  success: boolean;
-  output: string;
-  error?: string;
-  exitCode?: number | null;
-  waitingForInput?: boolean;
-  status: ExecutionStatus;
-  phase: ExecutionPhase;
-}> {
-  const post = (event: RuntimeEvent): void => {
-    self.postMessage(event);
-  };
+  session: ExecutionSession,
+): Promise<PythonRunResult> => {
+  const attempt = session.attempt;
+  const pyodide = await getPyodideRuntime();
+  const outputChunks: string[] = [];
+  const sharedStdin = session.stdinBuffer
+    ? new SharedStdinReader(session.stdinBuffer)
+    : null;
 
-  const emit = (
-    stream: OutputStream,
-    text: string
-  ): void => {
+  let stdinOffset = 0;
+  let stdinRequested = false;
+
+  const emit = (stream: OutputStream, text: string): void => {
     if (!text) {
       return;
     }
 
-    post({
-      type: 'stream',
-      requestId,
-      stream,
-      text,
-      attempt,
-    });
+    outputChunks.push(text);
+    postStream(requestId, stream, text, attempt);
   };
 
-  try {
-    if (!pyodideRuntimePromise) {
-      post({
-        type: 'status',
-        requestId,
-        status: 'preparing',
-        attempt,
-      });
-    }
+  pyodide.setStdout({
+    batched: (text: string) => emit('stdout', text),
+  });
 
-    let pyodide: PyodideRuntime;
-    try {
-      pyodide = await getPyodideRuntime();
-    } catch (loadError) {
-      const errorMsg = loadError instanceof Error ? loadError.message : String(loadError);
-      emit('stderr', `Failed to load Pyodide: ${errorMsg}\n`);
-      throw loadError;
-    }
+  pyodide.setStderr({
+    batched: (text: string) => {
+      if (!text.includes(STDIN_REQUIRED_MARKER)) {
+        emit('stderr', text);
+      }
+    },
+  });
 
-    // Configure streams for this attempt so emit closure captures current attempt
-    pyodide.setStdout({
-      batched: (s: string) => {
-        emit('stdout', s);
-      },
-    });
+  pyodide.setStdin({
+    stdin: () => {
+      stdinRequested = true;
 
-    pyodide.setStderr({
-      batched: (s: string) => {
-        // Drop the traceback line produced when the stdin handler
-        // suspends for more input; it is not a real error.
-        if (s.includes(STDIN_REQUIRED_MARKER)) {
-          return;
-        }
-        emit('stderr', s);
-      },
-    });
+      if (sharedStdin) {
+        return sharedStdin.readLine();
+      }
 
-    const sharedStdin = session.stdinBuffer
-      ? new SharedStdinReader(session.stdinBuffer)
-      : null;
+      if (stdinOffset < session.stdin.length) {
+        const newlineIndex = session.stdin.indexOf('\n', stdinOffset);
 
-    // Live stdin: read from shared memory when available, otherwise use the
-    // replay buffer maintained by the legacy fallback path.
-    let stdinOffset = 0;
-    let wasStdinRequired = false;
-
-    pyodide.setStdin({
-      stdin: () => {
-        if (sharedStdin) {
-          return sharedStdin.readLine();
-        }
-
-        if (stdinOffset < session.stdin.length) {
-          const nl = session.stdin.indexOf('\n', stdinOffset);
-          if (nl !== -1) {
-            const line = session.stdin.slice(stdinOffset, nl);
-            stdinOffset = nl + 1;
-            return line;
-          }
-          const line = session.stdin.slice(stdinOffset);
+        if (newlineIndex === -1) {
+          const remaining = session.stdin.slice(stdinOffset);
           stdinOffset = session.stdin.length;
-          return line;
+          return remaining;
         }
-        wasStdinRequired = true;
-        throw new StdinRequiredError();
-      },
+
+        const line = session.stdin.slice(stdinOffset, newlineIndex);
+        stdinOffset = newlineIndex + 1;
+        return line;
+      }
+
+      throw new StdinRequiredError();
+    },
+  });
+
+  postStatus(requestId, 'running', attempt);
+
+  const globals = pyodide.toPy({});
+
+  try {
+    const result = await pyodide.runPythonAsync(session.code, {
+      globals,
+      locals: globals,
     });
 
-    post({
-      type: 'status',
-      requestId,
-      status: 'running',
-      attempt,
-    });
+    if (
+      result !== undefined &&
+      result !== null &&
+      String(result) !== 'None'
+    ) {
+      const value = `${String(result)}\n`;
+      emit('stdout', value);
+    }
 
-    // Run the Python code
-    let output = '';
-    // Each attempt gets a fresh globals table so imports and variables from
-    // prior runs do not leak into the next execution.
-    const globals = pyodide.toPy({});
+    return {
+      success: true,
+      output: outputChunks.join(''),
+      exitCode: 0,
+      waitingForInput: false,
+      status: 'completed',
+      phase: 'run',
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
 
-    try {
-      const result = await pyodide.runPythonAsync(code, {
-        globals,
-        locals: globals,
-      });
-      
-      // Convert result to string if it's not None
-      if (result !== undefined && result !== null) {
-        const resultStr = String(result);
-        if (resultStr && resultStr !== 'None') {
-          output = resultStr;
-          emit('stdout', resultStr + '\n');
-        }
-      }
-
-      return {
-        success: true,
-        output,
-        error: undefined,
-        exitCode: 0,
-        waitingForInput: false,
-        status: 'completed',
-        phase: 'run',
-      };
-    } catch (pythonError) {
-      const errorMessage = pythonError instanceof Error ? pythonError.message : String(pythonError);
-
-      // Live stdin suspend: the stdin handler threw to request more
-      // input. Surface it as waiting-input so the client forwards more
-      // via sendInput and re-runs with the accumulated buffer.
-      if (
-        wasStdinRequired ||
-        errorMessage.includes(STDIN_REQUIRED_MARKER) ||
-        errorMessage.includes('Errno 29')
-      ) {
-        // Pyodide cannot suspend the same stack frame at input(); the run is
-        // replayed from scratch with the accumulated stdin buffer instead.
-        return {
-          success: false,
-          output: '',
-          error: '',
-          exitCode: null,
-          waitingForInput: true,
-          status: 'waiting-input',
-          phase: 'run',
-        };
-      }
-
-      // Check if this is a syntax error vs runtime error
-      if (errorMessage.includes('SyntaxError')) {
-        return {
-          success: false,
-          output: errorMessage,
-          error: errorMessage,
-          exitCode: 1,
-          waitingForInput: false,
-          status: 'failed',
-          phase: 'compile',
-        };
-      }
-
+    if (
+      error instanceof StdinRequiredError ||
+      stdinRequested ||
+      message.includes(STDIN_REQUIRED_MARKER) ||
+      message.includes('Errno 29')
+    ) {
       return {
         success: false,
-        output: errorMessage,
-        error: errorMessage,
-        exitCode: 1,
-        waitingForInput: false,
-        status: 'failed',
+        output: outputChunks.join(''),
+        error: '',
+        exitCode: null,
+        waitingForInput: true,
+        status: 'waiting-input',
         phase: 'run',
       };
-    } finally {
-      try {
-        globals.destroy();
-      } catch {
-        // Ignore proxy cleanup errors.
-      }
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    
+
     return {
       success: false,
       output: message,
       error: message,
-      exitCode: null,
+      exitCode: 1,
+      waitingForInput: false,
       status: 'failed',
-      phase: 'run',
+      phase: message.includes('SyntaxError') ? 'compile' : 'run',
     };
+  } finally {
+    globals.destroy();
   }
-}
+};
 
-const finishRun = (
+const finishSession = (
   requestId: string,
-  attempt: number,
-  result: Awaited<ReturnType<typeof runPython>>
+  session: ExecutionSession,
+  result: PythonRunResult,
 ): void => {
-  self.postMessage({
-    type: 'status',
-    requestId,
-    status: result.status,
-    attempt,
-  } satisfies RuntimeEvent);
-
-  self.postMessage({
+  postEvent({
     type: 'result',
     requestId,
     success: result.success,
@@ -353,131 +319,100 @@ const finishRun = (
     waitingForInput: result.waitingForInput ?? false,
     status: result.status,
     phase: result.phase,
-  } satisfies RuntimeEvent);
+  });
 
-  if (!result.waitingForInput) {
+  if (result.waitingForInput) {
+    session.attempt += 1;
+  } else {
     executionSessions.delete(requestId);
   }
 };
 
+const failSession = (
+  requestId: string,
+  attempt: number,
+  error: unknown,
+): void => {
+  const message = error instanceof Error ? error.message : String(error);
+
+  postStatus(requestId, 'failed', attempt);
+  postEvent({
+    type: 'result',
+    requestId,
+    success: false,
+    output: message,
+    error: message,
+    exitCode: null,
+    waitingForInput: false,
+    status: 'failed',
+    phase: 'run',
+  });
+
+  executionSessions.delete(requestId);
+};
+
 const runSession = async (
   requestId: string,
-  session: Session
+  session: ExecutionSession,
 ): Promise<void> => {
-  const attempt = session.attempt;
-
-  const result = await runPython(
-    session.code,
-    requestId,
-    attempt,
-    session
-  );
-
-  if (result.waitingForInput) {
-    // Match the C worker: bump attempt so the client replaces (not
-    // appends) the re-streamed output on the resumed run.
-    session.attempt += 1;
+  if (!pyodidePromise) {
+    postStatus(requestId, 'preparing', session.attempt);
   }
 
-  finishRun(requestId, attempt, result);
+  try {
+    finishSession(
+      requestId,
+      session,
+      await runPython(requestId, session),
+    );
+  } catch (error: unknown) {
+    failSession(requestId, session.attempt, error);
+  }
+};
+
+const handleCompile = (
+  request: Extract<RuntimeRequest, { type: 'compile' }>,
+): void => {
+  const session: ExecutionSession = {
+    code: request.code,
+    stdin: request.stdin ?? '',
+    stdinBuffer: request.stdinBuffer,
+    attempt: 1,
+  };
+
+  executionSessions.set(request.requestId, session);
+  enqueueExecution(() => runSession(request.requestId, session));
+};
+
+const handleStdin = (
+  request: Extract<RuntimeRequest, { type: 'stdin' }>,
+): void => {
+  const session = executionSessions.get(request.requestId);
+
+  if (!session) {
+    return;
+  }
+
+  session.stdin += `${request.input}\n`;
+  enqueueExecution(() => runSession(request.requestId, session));
 };
 
 self.addEventListener(
   'message',
-  (
-    event: MessageEvent<RuntimeRequest>
-  ) => {
-    const data = event.data;
+  (event: MessageEvent<RuntimeRequest>) => {
+    const request = event.data;
 
-    if (!data) {
+    if (!request) {
       return;
     }
 
-    if (data.type === 'stdin') {
-      const session = executionSessions.get(data.requestId);
-      if (!session) {
-        return;
-      }
-
-      session.stdin += data.input;
-
-      enqueueExecution(async () => {
-        try {
-          await runSession(data.requestId, session);
-        } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : String(error);
-
-          self.postMessage({
-            type: 'status',
-            requestId: data.requestId,
-            status: 'failed',
-            attempt: session.attempt,
-          } satisfies RuntimeEvent);
-
-          self.postMessage({
-            type: 'result',
-            requestId: data.requestId,
-            success: false,
-            output: message,
-            error: message,
-            exitCode: null,
-            waitingForInput: false,
-            status: 'failed',
-            phase: 'run',
-          } satisfies RuntimeEvent);
-
-          executionSessions.delete(data.requestId);
-        }
-      });
+    if (request.type === 'stdin') {
+      handleStdin(request);
       return;
     }
 
-    if (data.type !== 'compile') {
-      return;
+    if (request.type === 'compile') {
+      handleCompile(request);
     }
-
-    const session: Session = {
-      code: data.code,
-      stdin: data.stdin ?? '',
-      stdinBuffer: data.stdinBuffer ?? null,
-      attempt: 1,
-    };
-
-    executionSessions.set(data.requestId, session);
-
-    enqueueExecution(async () => {
-      try {
-        await runSession(data.requestId, session);
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
-
-        self.postMessage({
-          type: 'status',
-          requestId: data.requestId,
-          status: 'failed',
-          attempt: 1,
-        } satisfies RuntimeEvent);
-
-        self.postMessage({
-          type: 'result',
-          requestId: data.requestId,
-          success: false,
-          output: message,
-          error: message,
-          exitCode: null,
-          waitingForInput: false,
-          status: 'failed',
-          phase: 'compile',
-        } satisfies RuntimeEvent);
-
-        executionSessions.delete(data.requestId);
-      }
-    });
-  }
+  },
 );

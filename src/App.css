@@ -1,2 +1,7 @@
-/* App.css - Reserved for future component-specific styles */
-/* Legacy Vite template styles removed - unused in ForgeByteX */
+/*
+ * App-level styles are intentionally kept empty.
+ *
+ * ForgeByteX uses index.css for global theme tokens, responsive layout rules,
+ * shared controls, and workspace surfaces. Keep feature-specific styles near
+ * their components when future upgrades need isolated styling.
+ */

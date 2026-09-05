@@ -1,5 +1,8 @@
 import type * as monaco from 'monaco-editor';
 
+const MARKER_OWNER = 'forgebytex';
+const MARKER_SOURCE = 'ForgeByteX Error Doctor';
+
 export interface CompilerDiagnostic {
   line: number;
   column?: number;
@@ -9,65 +12,119 @@ export interface CompilerDiagnostic {
 }
 
 /**
- * Converts internal diagnostic objects into Monaco IMarkerData formats.
+ * Converts normalized diagnostics into bounded Monaco marker data.
  */
 export const mapDiagnosticsToMarkers = (
   monacoInstance: typeof monaco,
   editorModel: monaco.editor.ITextModel,
-  diagnostics: CompilerDiagnostic[]
+  diagnostics: CompilerDiagnostic[],
 ): monaco.editor.IMarkerData[] => {
-  return diagnostics.map((diag) => {
-    const lineCount = editorModel.getLineCount();
-    const targetLine = Math.min(Math.max(diag.line, 1), lineCount);
-    const lineMaxCol = editorModel.getLineMaxColumn(targetLine);
-    
-    const startCol = diag.column ? Math.min(Math.max(diag.column, 1), lineMaxCol) : 1;
-    const endCol = diag.column ? Math.min(startCol + 1, lineMaxCol) : lineMaxCol;
+  const lineCount = Math.max(editorModel.getLineCount(), 1);
 
-    let severity: monaco.MarkerSeverity;
-    switch (diag.severity) {
-      case 'warning':
-        severity = monacoInstance.MarkerSeverity.Warning;
-        break;
-      case 'info':
-        severity = monacoInstance.MarkerSeverity.Info;
-        break;
-      case 'error':
-      default:
-        severity = monacoInstance.MarkerSeverity.Error;
-        break;
-    }
+  return diagnostics.map((diagnostic) => {
+    const lineNumber = clamp(
+      diagnostic.line,
+      1,
+      lineCount,
+    );
+    const lineMaxColumn = Math.max(
+      editorModel.getLineMaxColumn(lineNumber),
+      1,
+    );
+    const startColumn = clamp(
+      diagnostic.column ?? 1,
+      1,
+      lineMaxColumn,
+    );
+    const endColumn = Math.min(
+      startColumn + 1,
+      lineMaxColumn,
+    );
 
     return {
-      startLineNumber: targetLine,
-      startColumn: startCol,
-      endLineNumber: targetLine,
-      endColumn: endCol,
-      message: diag.message,
-      severity,
-      source: 'forgebyteX Compiler',
+      startLineNumber: lineNumber,
+      startColumn,
+      endLineNumber: lineNumber,
+      endColumn: Math.max(endColumn, startColumn),
+      message: formatDiagnosticMessage(diagnostic),
+      severity: getMarkerSeverity(
+        monacoInstance,
+        diagnostic.severity,
+      ),
+      source: MARKER_SOURCE,
     };
   });
 };
 
 /**
- * Clears all forgebyteX-generated markers from the current model.
+ * Clears only the markers owned by ForgeByteX.
  */
 export const clearMonacoMarkers = (
   monacoInstance: typeof monaco,
-  editorModel: monaco.editor.ITextModel
-) => {
-  monacoInstance.editor.setModelMarkers(editorModel, 'forgebytex', []);
+  editorModel: monaco.editor.ITextModel,
+): void => {
+  monacoInstance.editor.setModelMarkers(
+    editorModel,
+    MARKER_OWNER,
+    [],
+  );
 };
 
 /**
- * Applies diagnostic markers to a given model.
+ * Applies normalized diagnostics to a Monaco model.
  */
 export const setMonacoMarkers = (
   monacoInstance: typeof monaco,
   editorModel: monaco.editor.ITextModel,
-  diagnostics: CompilerDiagnostic[]
-) => {
-  const markers = mapDiagnosticsToMarkers(monacoInstance, editorModel, diagnostics);
-  monacoInstance.editor.setModelMarkers(editorModel, 'byteplay', markers);
+  diagnostics: CompilerDiagnostic[],
+): void => {
+  monacoInstance.editor.setModelMarkers(
+    editorModel,
+    MARKER_OWNER,
+    mapDiagnosticsToMarkers(
+      monacoInstance,
+      editorModel,
+      diagnostics,
+    ),
+  );
 };
+
+function formatDiagnosticMessage(
+  diagnostic: CompilerDiagnostic,
+): string {
+  const filePrefix = diagnostic.file
+    ? `${diagnostic.file}: `
+    : '';
+
+  return `${filePrefix}${diagnostic.message}`;
+}
+
+function getMarkerSeverity(
+  monacoInstance: typeof monaco,
+  severity: CompilerDiagnostic['severity'],
+): monaco.MarkerSeverity {
+  switch (severity) {
+    case 'warning':
+      return monacoInstance.MarkerSeverity.Warning;
+    case 'info':
+      return monacoInstance.MarkerSeverity.Info;
+    case 'error':
+    default:
+      return monacoInstance.MarkerSeverity.Error;
+  }
+}
+
+function clamp(
+  value: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (!Number.isFinite(value)) {
+    return minimum;
+  }
+
+  return Math.min(
+    Math.max(Math.trunc(value), minimum),
+    maximum,
+  );
+}

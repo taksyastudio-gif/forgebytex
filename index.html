@@ -1,110 +1,98 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
 
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
 
     <meta name="theme-color" content="#0f172a" />
+    <meta name="color-scheme" content="dark light" />
 
     <meta
       name="description"
-      content="ForgeByteX Arena is a professional code editor and online compiler for C, Python, HTML, CSS, and JavaScript. Learn, practice, and test code with instant feedback and interactive execution."
+      content="ForgeByteX is a free browser-based IDE and compiler for C, C++, Python, HTML, CSS, and JavaScript."
     />
 
     <meta
       name="keywords"
-      content="forgebyteX, C compiler, Python interpreter, HTML editor, CSS editor, JavaScript, online IDE, code playground, NEB computer science, programming education"
+      content="ForgeByteX, online compiler, online IDE, C compiler, C++ compiler, Python editor, HTML editor, CSS editor, JavaScript playground"
     />
 
+    <meta name="author" content="TAKSYA STUDIO" />
     <meta name="robots" content="index, follow" />
-    <meta name="author" content="forgebyteX Arena" />
 
-    <!-- Google Search Console Verification -->
+    <!-- Search Console verification. -->
     <meta
       name="google-site-verification"
       content="oYHrTA2JKId6sFOVDN_UHdN4HOO6xA7RpAGd-cPL8pI"
     />
 
-    <!-- Open Graph -->
+    <!-- Open Graph metadata for link previews. -->
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ForgeByteX" />
     <meta
       property="og:title"
-      content="ForgeByteX Arena | Professional Code Editor & Online Compiler"
+      content="ForgeByteX | Free Browser-Based IDE and Compiler"
     />
     <meta
       property="og:description"
-      content="Professional code editor and online compiler for C, Python, HTML, CSS, and JavaScript with instant feedback and interactive execution."
+      content="Write, run, debug, and preview code directly in your browser with ForgeByteX."
     />
-    <meta property="og:site_name" content="ForgeByteX Arena" />
+    <meta
+      property="og:url"
+      content="https://forgebytex-cpyzmm1u8-taksya.vercel.app/"
+    />
 
-    <!-- Twitter -->
-    <meta name="twitter:card" content="summary_large_image" />
+    <!-- Twitter metadata for social sharing. -->
+    <meta name="twitter:card" content="summary" />
     <meta
       name="twitter:title"
-      content="ForgeByteX Arena | Professional Code Editor & Online Compiler"
+      content="ForgeByteX | Free Browser-Based IDE and Compiler"
     />
     <meta
       name="twitter:description"
-      content="Professional code editor and online compiler for C, Python, HTML, CSS, and JavaScript with instant feedback and interactive execution."
+      content="A free browser-native workspace for C, C++, Python, HTML, CSS, and JavaScript."
     />
 
-    <!-- Canonical URL -->
-    <link
-      rel="canonical"
-      href="https://forgebytex-cpyzmm1u8-taksya.vercel.app/"
-    />
+    <link rel="canonical" href="https://forgebytex-cpyzmm1u8-taksya.vercel.app/" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/site.webmanifest" />
 
-    <!-- Open Graph URL -->
-    <meta property="og:url" content="https://forgebytex-cpyzmm1u8-taksya.vercel.app/" />
-
-    <!-- Structured Data (JSON-LD) -->
     <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      "name": "ForgeByteX Arena",
-      "description": "Professional code editor and online compiler for C, Python, HTML, CSS, and JavaScript with instant feedback and interactive execution.",
-      "url": "https://forgebytex-cpyzmm1u8-taksya.vercel.app/",
-      "applicationCategory": "DeveloperApplication",
-      "operatingSystem": "Web",
-      "offers": {
-        "@type": "Offer",
-        "price": "0",
-        "priceCurrency": "USD"
-      },
-      "author": {
-        "@type": "Organization",
-        "name": "TAKSYA STUDIO"
-      },
-      "keywords": "C compiler, Python interpreter, HTML editor, online IDE, code playground, programming education, NEB computer science"
-    }
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "ForgeByteX",
+        "description": "A free browser-based IDE and compiler for C, C++, Python, HTML, CSS, and JavaScript.",
+        "url": "https://forgebytex-cpyzmm1u8-taksya.vercel.app/",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Web",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "author": {
+          "@type": "Organization",
+          "name": "TAKSYA STUDIO"
+        }
+      }
     </script>
 
-    <!-- Web App Manifest -->
-    <link
-      rel="icon"
-      type="image/svg+xml"
-      href="/favicon.svg"
-    />
-
-    <link
-      rel="manifest"
-      href="/site.webmanifest"
-    />
-
-    <title>ForgeByteX Arena | Professional Code Editor & Online Compiler</title>
+    <title>ForgeByteX | Browser-Based IDE and Compiler</title>
   </head>
 
   <body>
+    <noscript>
+      ForgeByteX requires JavaScript to run the browser-based editor and compiler.
+    </noscript>
+
     <div id="root"></div>
 
-    <script
-      type="module"
-      src="/src/main.tsx"
-    ></script>
+    <!-- Vite resolves this entry point during development and production builds. -->
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

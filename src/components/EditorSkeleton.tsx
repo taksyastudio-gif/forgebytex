@@ -1,13 +1,18 @@
-import React from 'react';
+import type { FC } from 'react';
 
-export const EditorSkeleton: React.FC = () => (
-  <div className="code-editor-frame relative flex h-full min-h-[250px] sm:min-h-[300px] w-full flex-1 flex-col overflow-hidden bg-editor-bg">
-    <div className="flex items-center h-9 px-2 border-b border-theme bg-surface shrink-0 gap-1 animate-pulse">
-      <div className="h-5 w-20 bg-surface-soft rounded" />
-      <div className="h-5 w-20 bg-surface-soft rounded" />
+export const EditorSkeleton: FC = () => (
+  <div
+    aria-busy="true"
+    aria-label="Loading code editor"
+    className="code-editor-frame relative flex h-full min-h-[250px] w-full flex-1 flex-col overflow-hidden bg-editor-bg sm:min-h-[300px]"
+  >
+    <div className="flex h-9 shrink-0 items-center gap-1 border-b border-theme bg-surface px-2">
+      <div className="h-5 w-20 animate-pulse rounded bg-surface-soft" />
+      <div className="h-5 w-20 animate-pulse rounded bg-surface-soft" />
     </div>
-    <div className="flex-1 min-h-0 relative w-full h-full flex items-center justify-center text-muted text-xs font-mono">
-      <span>Loading editor…</span>
+
+    <div className="flex min-h-0 flex-1 items-center justify-center text-xs font-mono text-muted">
+      Loading editor...
     </div>
   </div>
 );

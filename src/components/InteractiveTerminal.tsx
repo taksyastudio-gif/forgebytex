@@ -1,5 +1,10 @@
-import React, { useEffect, useRef } from 'react';
+import {
+  useEffect,
+  useRef,
+  type FC,
+} from 'react';
 import { Terminal } from 'xterm';
+import type { ITheme } from 'xterm';
 
 import 'xterm/css/xterm.css';
 
@@ -9,12 +14,11 @@ interface InteractiveTerminalProps {
   terminalLogs: string[];
   isWaitingForInput?: boolean;
   onInput: (value: string) => void;
-  /** Increment this to hard-clear the terminal (e.g. when user clicks Clear). */
   clearGeneration?: number;
   theme?: EditorTheme;
 }
 
-const XTERM_THEMES: Record<EditorTheme, import('xterm').ITheme> = {
+const XTERM_THEMES: Record<EditorTheme, ITheme> = {
   black: {
     background: '#060910',
     foreground: '#f8fafc',
@@ -59,7 +63,9 @@ const XTERM_THEMES: Record<EditorTheme, import('xterm').ITheme> = {
   },
 };
 
-export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
+export const InteractiveTerminal: FC<
+  InteractiveTerminalProps
+> = ({
   terminalLogs,
   isWaitingForInput = false,
   onInput,
@@ -68,66 +74,99 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
+
   const inputBufferRef = useRef('');
   const onInputRef = useRef(onInput);
-  const themeRef = useRef(theme);
-  /** How many log entries the terminal has already written. */
-  const prevLengthRef = useRef(0);
-  /** The clearGeneration that was last acted upon. */
-  const prevClearGenerationRef = useRef(clearGeneration);
+  const waitingRef = useRef(isWaitingForInput);
+
+  const previousLogCountRef = useRef(0);
+  const previousClearGenerationRef =
+    useRef(clearGeneration);
 
   useEffect(() => {
     onInputRef.current = onInput;
   }, [onInput]);
 
   useEffect(() => {
-    themeRef.current = theme;
-  }, [theme]);
+    waitingRef.current = isWaitingForInput;
 
-  // ── Mount the xterm Terminal once ────────────────────────────────────────
+    const terminal = terminalRef.current;
+
+    if (!terminal) {
+      return;
+    }
+
+    terminal.options.cursorBlink = isWaitingForInput;
+
+    if (isWaitingForInput) {
+      terminal.focus();
+    }
+  }, [isWaitingForInput]);
+
   useEffect(() => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+
+    if (!container) {
+      return;
+    }
 
     const terminal = new Terminal({
-      cursorBlink: true,
-      cursorStyle: 'block',
-      convertEol: true,
-      disableStdin: false,
       allowProposedApi: true,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+      convertEol: true,
+      cursorBlink: waitingRef.current,
+      cursorStyle: 'block',
+      disableStdin: false,
+      fontFamily:
+        "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
       fontSize: 13,
       lineHeight: 1.4,
-      theme: XTERM_THEMES[themeRef.current] ?? XTERM_THEMES.black,
       scrollback: 5000,
+      theme: XTERM_THEMES[theme],
     });
 
     terminalRef.current = terminal;
 
-    // Open inside requestAnimationFrame so the container has layout
-    const openFrame = requestAnimationFrame(() => {
-      if (!containerRef.current || terminalRef.current !== terminal) return;
-      terminal.open(containerRef.current);
-      terminal.focus();
-    });
-
-    // Handle keyboard input
-    terminal.onData((data) => {
-      // Backspace
-      if (data === '\u007f' || data === '\b') {
-        if (inputBufferRef.current.length > 0) {
-          inputBufferRef.current = inputBufferRef.current.slice(0, -1);
-          terminal.write('\b \b');
-        }
+    const openFrame = window.requestAnimationFrame(() => {
+      if (terminalRef.current !== terminal) {
         return;
       }
 
-      // Enter
+      terminal.open(container);
+      terminal.focus();
+    });
+
+    const dataSubscription = terminal.onData((data) => {
+      if (!waitingRef.current) {
+        return;
+      }
+
+      if (data === '\u007f' || data === '\b') {
+        if (inputBufferRef.current.length === 0) {
+          return;
+        }
+
+        inputBufferRef.current =
+          inputBufferRef.current.slice(0, -1);
+
+        terminal.write('\b \b');
+        return;
+      }
+
       if (data === '\r' || data === '\n') {
-        const rawInput = inputBufferRef.current;
+        const input = inputBufferRef.current;
+
         inputBufferRef.current = '';
-        // Preserve empty lines: readers still need the newline delimiter.
-        onInputRef.current(rawInput);
+
         terminal.write('\r\n');
+
+        // The worker receives one complete line. The parent App
+        // is responsible for adding the newline expected by C/Python.
+        onInputRef.current(input);
+        return;
+      }
+
+      // Ignore control sequences that should not become source input.
+      if (data.startsWith('\u001b')) {
         return;
       }
 
@@ -135,64 +174,118 @@ export const InteractiveTerminal: React.FC<InteractiveTerminalProps> = ({
       terminal.write(data);
     });
 
+    const resizeObserver = new ResizeObserver(() => {
+      terminal.resize(
+        Math.max(terminal.cols, 1),
+        Math.max(terminal.rows, 1),
+      );
+    });
+
+    resizeObserver.observe(container);
+
     return () => {
-      cancelAnimationFrame(openFrame);
+      window.cancelAnimationFrame(openFrame);
+      dataSubscription.dispose();
+      resizeObserver.disconnect();
+
       terminal.dispose();
       terminalRef.current = null;
-      prevLengthRef.current = 0;
-      prevClearGenerationRef.current = 0;
+      inputBufferRef.current = '';
+      previousLogCountRef.current = 0;
     };
-  }, []);
+  }, [theme]);
 
-  // ── Hard clear when clearGeneration changes ───────────────────────────────
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal) return;
 
-    if (clearGeneration !== prevClearGenerationRef.current) {
-      prevClearGenerationRef.current = clearGeneration;
-      prevLengthRef.current = 0;
+    if (!terminal) {
+      return;
+    }
+
+    terminal.options.theme = XTERM_THEMES[theme];
+  }, [theme]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+
+    if (!terminal) {
+      return;
+    }
+
+    if (
+      clearGeneration !==
+      previousClearGenerationRef.current
+    ) {
+      previousClearGenerationRef.current =
+        clearGeneration;
+
+      previousLogCountRef.current = 0;
+      inputBufferRef.current = '';
+
       terminal.clear();
       terminal.reset();
     }
   }, [clearGeneration]);
 
-  // ── Sync xterm colors when theme changes ─────────────────────────────────
   useEffect(() => {
     const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.theme = XTERM_THEMES[theme] ?? XTERM_THEMES.black;
-  }, [theme]);
 
-  // ── Append-only: write only the NEW log entries ──────────────────────────
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-
-    const newEntries = terminalLogs.slice(prevLengthRef.current);
-    if (newEntries.length === 0) return;
-
-    for (const entry of newEntries) {
-      // Each entry ends with a newline so lines stay separate.
-      // Entries that already contain \n (multi-line output) are written as-is.
-      terminal.write(entry.endsWith('\n') ? entry : entry + '\r\n');
+    if (!terminal) {
+      return;
     }
 
-    prevLengthRef.current = terminalLogs.length;
+    if (
+      terminalLogs.length <
+      previousLogCountRef.current
+    ) {
+      terminal.clear();
+      terminal.reset();
+      previousLogCountRef.current = 0;
+    }
+
+    const newEntries = terminalLogs.slice(
+      previousLogCountRef.current,
+    );
+
+    for (const entry of newEntries) {
+      terminal.write(formatTerminalEntry(entry));
+    }
+
+    previousLogCountRef.current = terminalLogs.length;
+
+    if (newEntries.length > 0) {
+      terminal.scrollToBottom();
+    }
   }, [terminalLogs]);
 
-  // ── Cursor blink reflects waiting-for-input state ────────────────────────
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    terminal.options.cursorBlink = isWaitingForInput;
-  }, [isWaitingForInput]);
-
   return (
-    <div className="h-full w-full bg-[#05070d] p-2">
-      <div ref={containerRef} className="h-full w-full overflow-hidden rounded-md" />
+    <div className="h-full w-full bg-terminal-bg p-2">
+      <div
+        aria-label={
+          isWaitingForInput
+            ? 'Program input terminal'
+            : 'Program output terminal'
+        }
+        className="h-full w-full overflow-hidden rounded-md"
+        ref={containerRef}
+      />
     </div>
   );
+};
+
+const formatTerminalEntry = (text: string): string => {
+  if (!text) {
+    return '';
+  }
+
+  const normalized = text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+
+  return normalized
+    .split('\n')
+    .map((line) => `${line}\r\n`)
+    .join('');
 };
 
 export default InteractiveTerminal;

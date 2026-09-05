@@ -1,396 +1,305 @@
-import { ExecutionClient } from './execution-client';
-import CompilerWorker from './compiler.worker?worker';
-
-export type {
-  CompileResult,
-  ExecutionResult,
-} from './execution-protocol';
-
+import { ErrorInterpreter } from './error-interpreter';
 import type {
-  ExecutionPhase,
   ExecutionResult,
-  ExecutionStatus,
-  RunHooks,
+  RuntimeEvent,
+  SupportedLanguage,
 } from './execution-protocol';
+import type { ExecutionCallbacks } from './execution-client';
 
-type BackendStartResponse = {
-  success?: boolean;
-  requestId?: string;
-  sessionId?: string;
-  phase?: ExecutionPhase;
-  output?: string;
-  error?: string | { message?: string };
-  warnings?: string;
-  exitCode?: number | null;
-  stdout?: string;
-  stderr?: string;
-};
-
-type BackendStreamEvent = {
-  type?: 'stream';
-  requestId?: string;
-  stream?: 'stdout' | 'stderr';
-  text?: string;
-  attempt?: number;
-};
-
-type BackendStatusEvent = {
-  type?: 'status';
-  requestId?: string;
-  status?: ExecutionStatus;
-  attempt?: number;
-};
-
-type BackendResultEvent = {
-  type?: 'result';
-  requestId?: string;
-  success?: boolean;
-  output?: string;
-  error?: string | { message?: string };
-  warnings?: string;
-  exitCode?: number | null;
-  waitingForInput?: boolean;
-  status?: ExecutionStatus;
-  phase?: ExecutionPhase;
-};
-
-type ActiveBackendRun = {
-  sessionId: string;
-  eventSource: EventSource;
-  hooks: RunHooks;
+interface PendingExecution {
   resolve: (result: ExecutionResult) => void;
-  reject: (error: Error) => void;
-  stdout: string;
-  stderr: string;
-  warnings?: string;
-  settled: boolean;
-};
-
-function normalizeBackendError(
-  error: BackendStartResponse['error'],
-  fallback: string
-): string {
-  if (!error) {
-    return fallback;
-  }
-
-  if (typeof error === 'string') {
-    return error;
-  }
-
-  return error.message || fallback;
+  callbacks?: ExecutionCallbacks;
 }
 
 /**
- * C pipeline client.
+ * Owns the dedicated C/C++ Web Worker.
  *
- * If a backend URL is available we run C through the native interactive
- * execution service so scanf() can keep the child process alive while
- * waiting for stdin. Otherwise we fall back to the browser worker path.
+ * Worker output and lifecycle events are forwarded immediately to the UI,
+ * while the promise resolves only after the complete execution finishes.
  */
-class CompilerClientFacade {
-  private readonly inner: ExecutionClient;
-  private readonly backendUrl = import.meta.env.VITE_BACKEND_URL?.trim();
-  private backendRun: ActiveBackendRun | null = null;
-  private backendAbortController: AbortController | null = null;
+export class CompilerClient {
+  private worker: Worker | null = null;
+  private activeRequestId: string | null = null;
+  private pendingExecution: PendingExecution | null = null;
 
   constructor() {
-    this.inner = new ExecutionClient(
-      () => new CompilerWorker()
-    );
+    this.initializeWorker();
   }
 
-  compile(
-    code: string,
-    stdin = '',
-    hooks: RunHooks = {}
-  ) {
-    if (!this.backendUrl) {
-      return this.inner.compile(code, stdin, hooks);
-    }
-
-    return this.compileWithBackend(code, stdin, hooks);
-  }
-
-  private async compileWithBackend(
-    code: string,
-    stdin: string,
-    hooks: RunHooks
-  ): Promise<ExecutionResult> {
-    if (this.backendRun) {
-      return Promise.reject(new Error('An execution is already in progress.'));
-    }
-
-    hooks.onStatus?.('compiling');
-    const abortController = new AbortController();
-    this.backendAbortController = abortController;
-
-    try {
-      const response = await fetch(`${this.backendUrl}/api/execute`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          language: 'c',
-          source: code,
-          stdin,
-          interactive: true,
-        }),
-        signal: abortController.signal,
-      });
-
-      const payload = await response.json() as BackendStartResponse;
-
-      if (!response.ok || !payload.success || !payload.sessionId) {
-        const errorText = normalizeBackendError(
-          payload.error,
-          payload.output || payload.stderr || 'Compilation failed.'
-        );
-
-        if (payload.output) {
-          hooks.onOutput?.('stdout', payload.output, 1);
-        }
-
-        if (payload.stderr) {
-          hooks.onOutput?.('stderr', payload.stderr, 1);
-        }
-
-        hooks.onStatus?.('failed');
-
-        return {
-          success: false,
-          output: payload.output || payload.stderr || '',
-          error: errorText,
-          exitCode: payload.exitCode ?? null,
-          waitingForInput: false,
-          status: 'failed',
-          phase: payload.phase ?? 'compile',
-        };
-      }
-
-      return await new Promise<ExecutionResult>((resolve) => {
-        const sessionId = payload.sessionId as string;
-        const eventSource = new EventSource(
-          `${this.backendUrl}/api/execute/${sessionId}/events`
-        );
-
-        const cleanup = () => {
-          if (this.backendRun?.sessionId === sessionId) {
-            this.backendRun = null;
-          }
-
-          try {
-            eventSource.close();
-          } catch (error) {
-            if (error instanceof DOMException && error.name === 'AbortError') {
-              hooks.onStatus?.('stopped');
-              return {
-                success: false,
-                output: '',
-                error: 'Execution stopped.',
-                exitCode: null,
-                waitingForInput: false,
-                status: 'stopped',
-                phase: 'run',
-              };
-            }
-
-            // Ignore EventSource teardown errors.
-          }
-        };
-
-        const resolveOnce = (result: ExecutionResult) => {
-          if (!this.backendRun || this.backendRun.settled) {
-            return;
-          }
-
-          this.backendRun.settled = true;
-          cleanup();
-          resolve(result);
-        };
-
-        this.backendRun = {
-          sessionId,
-          eventSource,
-          hooks,
-          resolve: resolveOnce,
-          reject: () => {},
-          stdout: '',
-          stderr: '',
-          warnings: payload.warnings,
-          settled: false,
-        };
-
-        hooks.onStatus?.('running');
-
-        if (payload.warnings) {
-          this.backendRun.warnings = payload.warnings;
-        }
-
-        eventSource.addEventListener('stream', (event: MessageEvent) => {
-          if (!this.backendRun || this.backendRun.sessionId !== sessionId) {
-            return;
-          }
-
-          const data = JSON.parse(event.data as string) as BackendStreamEvent;
-          const text = data.text || '';
-          if (!text) {
-            return;
-          }
-
-          if (data.stream === 'stderr') {
-            this.backendRun.stderr += text;
-          } else {
-            this.backendRun.stdout += text;
-          }
-
-          hooks.onOutput?.(data.stream || 'stdout', text, data.attempt ?? 1);
-        });
-
-        eventSource.addEventListener('status', (event: MessageEvent) => {
-          const data = JSON.parse(event.data as string) as BackendStatusEvent;
-          if (data.status) {
-            hooks.onStatus?.(data.status);
-          }
-        });
-
-        eventSource.addEventListener('result', (event: MessageEvent) => {
-          if (!this.backendRun || this.backendRun.sessionId !== sessionId) {
-            return;
-          }
-
-          const data = JSON.parse(event.data as string) as BackendResultEvent;
-          const output = data.output ?? this.backendRun.stdout;
-          const stderr = this.backendRun.stderr.trim();
-          const errorText = normalizeBackendError(
-            data.error,
-            stderr || output || 'The runtime worker stopped unexpectedly.'
-          );
-
-          resolveOnce({
-            success: Boolean(data.success),
-            output,
-            error: data.success ? undefined : errorText,
-            warnings: data.warnings ?? this.backendRun.warnings,
-            exitCode: data.exitCode ?? null,
-            waitingForInput: false,
-            status: data.status ?? (data.success ? 'completed' : 'failed'),
-            phase: data.phase ?? 'run',
-          });
-        });
-
-        eventSource.onerror = () => {
-          if (!this.backendRun || this.backendRun.sessionId !== sessionId || this.backendRun.settled) {
-            return;
-          }
-
-          const error = new Error(
-            'The interactive C runtime connection was lost.'
-          );
-
-          resolveOnce({
-            success: false,
-            output: this.backendRun.stdout,
-            error: error.message,
-            exitCode: null,
-            waitingForInput: false,
-            status: 'failed',
-            phase: 'run',
-          });
-        };
-      });
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        hooks.onStatus?.('stopped');
-        return {
-          success: false,
-          output: '',
-          error: 'Execution stopped.',
-          exitCode: null,
-          waitingForInput: false,
-          status: 'stopped',
-          phase: 'run',
-        };
-      }
-
-      /*
-       * Keep the existing browser compiler as the resilience path when
-       * a configured backend is unreachable in local/dev environments.
-       */
-      return this.inner.compile(code, stdin, hooks);
-    } finally {
-      if (this.backendAbortController === abortController) {
-        this.backendAbortController = null;
-      }
-    }
-  }
-
-  sendInput(input: string): boolean {
-    if (!this.backendRun) {
-      return this.inner.sendInput(input);
-    }
-
-    const sessionId = this.backendRun.sessionId;
-
-    void fetch(`${this.backendUrl}/api/execute/${sessionId}/input`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        input,
-      }),
-    }).catch(() => {
-      // The session may disappear while the tab is closing; the next status
-      // event (or the normal stop path) remains authoritative.
-    });
-
-    return true;
-  }
-
-  stopCurrent(): void {
-    this.backendAbortController?.abort();
-    if (this.backendRun) {
-      const { sessionId, resolve, stdout, warnings } = this.backendRun;
-      this.backendRun.settled = true;
-      this.backendRun = null;
-
-      void fetch(`${this.backendUrl}/api/execute/${sessionId}/stop`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        keepalive: true,
-      });
-
-      resolve({
-        success: false,
-        output: stdout,
-        error: 'Execution stopped.',
-        warnings,
-        exitCode: null,
-        status: 'stopped',
-        waitingForInput: false,
-        phase: 'run',
-      });
+  private initializeWorker(): void {
+    if (typeof Worker === 'undefined') {
       return;
     }
 
-    this.inner.stopCurrent();
+    try {
+      this.worker = new Worker(
+        new URL('./compiler.worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+
+      this.worker.addEventListener(
+        'message',
+        (event: MessageEvent<RuntimeEvent>) => {
+          this.handleWorkerEvent(event.data);
+        },
+      );
+
+      this.worker.addEventListener('error', (event) => {
+        this.resolveWorkerFailure(
+          event.message ||
+            'The C/C++ worker stopped unexpectedly.',
+        );
+      });
+    } catch (error: unknown) {
+      this.worker = null;
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to initialize the C/C++ worker.';
+
+      console.error(
+        'C/C++ worker initialization failed:',
+        message,
+      );
+    }
   }
 
-  get busy(): boolean {
-    return this.backendRun !== null || this.inner.busy;
+  public compileAndRun(
+    code: string,
+    language: SupportedLanguage,
+    stdin = '',
+    callbacks?: ExecutionCallbacks,
+  ): Promise<ExecutionResult> {
+    if (this.pendingExecution) {
+      return Promise.resolve({
+        success: false,
+        output:
+          '[Execution Error] A C/C++ program is already running. Stop it before starting another run.',
+        error: 'A C/C++ execution is already active.',
+        exitCode: null,
+        status: 'failed',
+        phase: 'run',
+      });
+    }
+
+    if (!this.worker) {
+      return Promise.resolve({
+        success: false,
+        output:
+          '[Execution Error] The browser C/C++ worker is unavailable. Refresh the page and try again.',
+        error: 'C/C++ worker is unavailable.',
+        exitCode: null,
+        status: 'infrastructure-error',
+        phase: 'compile',
+      });
+    }
+
+    const requestId = this.createRequestId();
+
+    return new Promise<ExecutionResult>((resolve) => {
+      this.activeRequestId = requestId;
+      this.pendingExecution = {
+        resolve,
+        callbacks,
+      };
+
+      try {
+        this.worker?.postMessage({
+          type: 'compile',
+          requestId,
+          code,
+          language,
+          stdin,
+        });
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unable to send the program to the C/C++ worker.';
+
+        this.resolveWorkerFailure(message);
+      }
+    });
   }
 
-  terminate(): void {
-    this.backendAbortController?.abort();
-    this.backendAbortController = null;
-    this.stopCurrent();
-    this.inner.terminate();
+  public sendInput(input: string): void {
+    if (
+      !this.worker ||
+      !this.activeRequestId ||
+      !this.pendingExecution
+    ) {
+      return;
+    }
+
+    try {
+      this.worker.postMessage({
+        type: 'stdin',
+        requestId: this.activeRequestId,
+        input,
+      });
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to send input to the C/C++ worker.';
+
+      this.resolveWorkerFailure(message);
+    }
+  }
+
+  public stopCurrent(): void {
+    if (!this.pendingExecution) {
+      return;
+    }
+
+    const pendingExecution = this.pendingExecution;
+
+    this.pendingExecution = null;
+    this.activeRequestId = null;
+
+    pendingExecution.resolve({
+      success: false,
+      output: '[ForgeByteX] Execution stopped.',
+      error: 'Execution stopped by the user.',
+      exitCode: null,
+      status: 'stopped',
+      phase: 'run',
+    });
+
+    this.worker?.terminate();
+    this.worker = null;
+    this.initializeWorker();
+  }
+
+  private handleWorkerEvent(event: RuntimeEvent): void {
+    const pendingExecution = this.pendingExecution;
+
+    if (
+      !pendingExecution ||
+      !this.activeRequestId ||
+      event.requestId !== this.activeRequestId
+    ) {
+      return;
+    }
+
+    if (event.type === 'stream') {
+      pendingExecution.callbacks?.onOutput?.(
+        event.stream,
+        event.text,
+        event.attempt,
+      );
+      return;
+    }
+
+    if (event.type === 'status') {
+      pendingExecution.callbacks?.onStatus?.(event.status);
+      return;
+    }
+
+    const result = this.createExecutionResult(event);
+
+    pendingExecution.callbacks?.onStatus?.(result.status);
+
+    if (event.waitingForInput) {
+      pendingExecution.callbacks?.onStatus?.('waiting-input');
+      return;
+    }
+
+    this.pendingExecution = null;
+    this.activeRequestId = null;
+    pendingExecution.resolve(result);
+  }
+
+  private createExecutionResult(
+    event: Extract<RuntimeEvent, { type: 'result' }>,
+  ): ExecutionResult {
+    if (event.success) {
+      return {
+        success: true,
+        output:
+          event.output || 'Program completed with no output.',
+        error: event.error,
+        warnings: event.warnings,
+        exitCode: event.exitCode ?? 0,
+        waitingForInput: event.waitingForInput ?? false,
+        status: event.status,
+        phase: event.phase ?? 'run',
+      };
+    }
+
+    const rawError = event.error || event.output;
+    const insight = ErrorInterpreter.parse(rawError, 'c');
+
+    const friendlyOutput = [
+      `${insight.emoji} ${insight.humorousTitle}`,
+      '',
+      `What happened: ${insight.friendlyExplanation}`,
+      `Quick fix: ${insight.suggestedFix}`,
+      '',
+      '---------------- Raw Compiler Output ----------------',
+      rawError,
+    ].join('\n');
+
+    return {
+      success: false,
+      output: event.waitingForInput
+        ? event.output
+        : friendlyOutput,
+      error: rawError,
+      warnings: event.warnings,
+      exitCode: event.exitCode ?? 1,
+      waitingForInput: event.waitingForInput ?? false,
+      status: event.status,
+      phase: event.phase ?? 'compile',
+    };
+  }
+
+  private resolveWorkerFailure(message: string): void {
+    if (!this.pendingExecution) {
+      return;
+    }
+
+    const pendingExecution = this.pendingExecution;
+
+    this.pendingExecution = null;
+    this.activeRequestId = null;
+
+    pendingExecution.callbacks?.onStatus?.(
+      'infrastructure-error',
+    );
+
+    pendingExecution.resolve({
+      success: false,
+      output: `[C/C++ Worker Error] ${message}`,
+      error: message,
+      exitCode: null,
+      status: 'infrastructure-error',
+      phase: 'compile',
+    });
+  }
+
+  private createRequestId(): string {
+    if (
+      typeof crypto !== 'undefined' &&
+      'randomUUID' in crypto
+    ) {
+      return crypto.randomUUID();
+    }
+
+    return `c-run-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+  }
+
+  public terminate(): void {
+    this.resolveWorkerFailure(
+      'C/C++ execution was stopped by the application.',
+    );
+
+    this.worker?.terminate();
+    this.worker = null;
   }
 }
 
-export const compilerClient =
-  new CompilerClientFacade();
+export default CompilerClient;

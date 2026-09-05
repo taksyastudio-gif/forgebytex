@@ -4,12 +4,11 @@ import {
   getCompilerInvocation,
   setUpSysroot,
 } from 'browsercc';
-
 import {
-  WASI,
+  ConsoleStdout,
   File,
   OpenFile,
-  ConsoleStdout,
+  WASI,
   WASIProcExit,
 } from '@bjorn3/browser_wasi_shim';
 
@@ -19,17 +18,205 @@ import type {
   OutputStream,
   RuntimeEvent,
   RuntimeRequest,
+  SupportedLanguage,
 } from './execution-protocol';
 
-// browsercc and the WASI shim keep the C toolchain in the browser: Clang and
-// LLD run as WebAssembly, while this worker owns the session state and stdin
-// buffer for the current request.
+type CompilerInstance = Awaited<ReturnType<typeof Clang>>;
+type LinkerInstance = Awaited<ReturnType<typeof LLD>>;
+
+interface CompilerRunResult {
+  success: boolean;
+  output: string;
+  error?: string;
+  warnings?: string;
+  exitCode?: number | null;
+  waitingForInput?: boolean;
+  status: ExecutionStatus;
+  phase: ExecutionPhase;
+}
+
+interface ExecutionSession {
+  code: string;
+  language: SupportedLanguage;
+  stdin: string;
+  attempt: number;
+}
+
+const textEncoder = new TextEncoder();
+const executionSessions = new Map<string, ExecutionSession>();
+
+let sysrootPromise: Promise<ArrayBuffer> | null = null;
+let executionQueue: Promise<void> = Promise.resolve();
+
 class StdinRequiredError extends Error {
-  constructor(message = 'stdin is waiting for more input') {
-    super(message);
+  constructor() {
+    super('stdin is waiting for more input');
     this.name = 'StdinRequiredError';
   }
 }
+
+class InteractiveStdinFile extends File {
+  constructor() {
+    super(new Uint8Array());
+  }
+
+  public append(data: Uint8Array): void {
+    const next = new Uint8Array(this.data.length + data.length);
+
+    next.set(this.data, 0);
+    next.set(data, this.data.length);
+    this.data = next;
+  }
+}
+
+class InteractiveOpenFile extends OpenFile {
+  public fd_read(size: number): { ret: number; data: Uint8Array } {
+    const start = Number(this.file_pos);
+    const end = Math.min(this.file.data.length, start + size);
+    const data = this.file.data.slice(start, end);
+
+    if (data.length === 0) {
+      throw new StdinRequiredError();
+    }
+
+    this.file_pos += BigInt(data.length);
+
+    return {
+      ret: 0,
+      data,
+    };
+  }
+}
+
+const postEvent = (event: RuntimeEvent): void => {
+  self.postMessage(event);
+};
+
+const postStatus = (
+  requestId: string,
+  status: ExecutionStatus,
+  attempt: number,
+): void => {
+  postEvent({
+    type: 'status',
+    requestId,
+    status,
+    attempt,
+  });
+};
+
+const postStream = (
+  requestId: string,
+  stream: OutputStream,
+  text: string,
+  attempt: number,
+): void => {
+  if (!text) {
+    return;
+  }
+
+  postEvent({
+    type: 'stream',
+    requestId,
+    stream,
+    text,
+    attempt,
+  });
+};
+
+const enqueue = (task: () => Promise<void>): void => {
+  executionQueue = executionQueue.then(task, task);
+};
+
+const getClang = async (
+  onStderr: (text: string) => void,
+): Promise<CompilerInstance> =>
+  Clang({
+    thisProgram: 'clang',
+    printErr: onStderr,
+    locateFile: (path: string) =>
+      path.endsWith('clang.wasm') ? '/clang.wasm' : path,
+  }) as Promise<CompilerInstance>;
+
+const getLinker = async (
+  onStderr: (text: string) => void,
+): Promise<LinkerInstance> =>
+  LLD({
+    thisProgram: 'wasm-ld',
+    printErr: onStderr,
+    locateFile: (path: string) =>
+      path.endsWith('lld.wasm') ? '/lld.wasm' : path,
+  }) as Promise<LinkerInstance>;
+
+const getSysroot = async (): Promise<ArrayBuffer> => {
+  if (!sysrootPromise) {
+    sysrootPromise = fetch('/sysroot.tar')
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(
+            `Unable to load compiler sysroot (${response.status}).`,
+          );
+        }
+
+        return response.arrayBuffer();
+      })
+      .catch((error: unknown) => {
+        sysrootPromise = null;
+        throw error;
+      });
+  }
+
+  return sysrootPromise;
+};
+
+const getSourceFilename = (language: SupportedLanguage): string =>
+  language === 'cpp' ? 'main.cpp' : 'main.c';
+
+const createCompilerInvocation = async (
+  language: SupportedLanguage,
+  code: string,
+): Promise<Awaited<ReturnType<typeof getCompilerInvocation>>> => {
+  const filename = getSourceFilename(language);
+  const invocation = await getCompilerInvocation(filename, code, []);
+
+  const cxxFlags = new Set([
+    '-std=c++98',
+    '-std=c++03',
+    '-std=c++11',
+    '-std=c++14',
+    '-std=c++17',
+    '-std=c++20',
+    '-std=c++23',
+    '-std=gnu++98',
+    '-std=gnu++03',
+    '-std=gnu++11',
+    '-std=gnu++14',
+    '-std=gnu++17',
+    '-std=gnu++20',
+    '-std=gnu++23',
+  ]);
+
+  invocation.compilerArgs = invocation.compilerArgs.filter(
+    (argument) => !cxxFlags.has(argument),
+  );
+
+  invocation.compilerArgs.push(
+    '-x',
+    language === 'cpp' ? 'c++' : 'c',
+    language === 'cpp' ? '-std=c++17' : '-std=c17',
+  );
+
+  return invocation;
+};
+
+const createStdinFile = (stdin: string): OpenFile => {
+  const file = new InteractiveStdinFile();
+  const normalizedInput =
+    stdin && !stdin.endsWith('\n') ? `${stdin}\n` : stdin;
+
+  file.append(textEncoder.encode(normalizedInput));
+  return new InteractiveOpenFile(file);
+};
 
 const isStdinRequiredError = (error: unknown): boolean => {
   if (error instanceof StdinRequiredError) {
@@ -40,368 +227,141 @@ const isStdinRequiredError = (error: unknown): boolean => {
   return message.includes('stdin is waiting for more input');
 };
 
-class InteractiveStdinFile extends File {
-  constructor() {
-    super(new Uint8Array());
-  }
-
-  append(data: Uint8Array): void {
-    const next = new Uint8Array(this.data.length + data.length);
-    next.set(this.data, 0);
-    next.set(data, this.data.length);
-    this.data = next;
-  }
-}
-
-class InteractiveOpenFile extends OpenFile {
-  fd_read(size: number): { ret: number; data: Uint8Array } {
-    const slice = this.file.data.slice(
-      Number(this.file_pos),
-      Number(this.file_pos + BigInt(size))
-    );
-
-    if (slice.length === 0) {
-      throw new StdinRequiredError();
-    }
-
-    this.file_pos += BigInt(slice.length);
-    return { ret: 0, data: slice };
-  }
-}
-
-class SharedStdinOpenFile extends OpenFile {
-  private readonly control: Int32Array;
-  private readonly data: Uint8Array;
-
-  constructor(sharedBuffer: SharedArrayBuffer) {
-    super(new File(new Uint8Array()));
-    this.control = new Int32Array(sharedBuffer, 0, 4);
-    this.data = new Uint8Array(sharedBuffer, 16);
-  }
-
-  fd_read(size: number): { ret: number; data: Uint8Array } {
-    while (true) {
-      const writeIndex = Atomics.load(this.control, 0);
-      const readIndex = Atomics.load(this.control, 1);
-
-      if (readIndex < writeIndex) {
-        const endIndex = Math.min(writeIndex, readIndex + size);
-        const slice = this.data.slice(readIndex, endIndex);
-        Atomics.store(this.control, 1, readIndex + slice.length);
-        return { ret: 0, data: slice };
-      }
-
-      if (Atomics.load(this.control, 2) === 1) {
-        return { ret: 0, data: new Uint8Array(0) };
-      }
-
-      const version = Atomics.load(this.control, 3);
-      Atomics.wait(this.control, 3, version);
-    }
-  }
-}
-
-type CompilerInstance = Awaited<ReturnType<typeof Clang>>;
-type LinkerInstance = Awaited<ReturnType<typeof LLD>>;
-
-const textEncoder = new TextEncoder();
-
-/* ============================================================
-   TOOLCHAIN CACHE
-============================================================ */
-
-let sysrootPromise: Promise<ArrayBuffer> | null = null;
-
-/* ============================================================
-   LOAD CLANG
-============================================================ */
-
-const getClang = async (
-  onStderr?: (text: string) => void
-): Promise<CompilerInstance> => {
-  return (Clang({
-   thisProgram: 'clang',
-   printErr: (text: string) => {
-     if (onStderr) {
-       onStderr(text);
-     }
-   },
-   locateFile: (path: string) => {
-     if (path.endsWith('clang.wasm')) {
-       return '/clang.wasm';
-     }
-
-     return path;
-   },
-  }) as Promise<CompilerInstance>);
-};
-
-/* ============================================================
-   LOAD LLD
-============================================================ */
-
-const getLld = async (
-  onStderr?: (text: string) => void
-): Promise<LinkerInstance> => {
-  return (LLD({
-   thisProgram: 'wasm-ld',
-   printErr: (text: string) => {
-     if (onStderr) {
-       onStderr(text);
-     }
-   },
-   locateFile: (path: string) => {
-     if (path.endsWith('lld.wasm')) {
-       return '/lld.wasm';
-     }
-
-     return path;
-   },
-  }) as Promise<LinkerInstance>);
-};
-
-/* ============================================================
-   LOAD SYSROOT
-============================================================ */
-
-const getSysroot = async (): Promise<ArrayBuffer> => {
-  if (!sysrootPromise) {
-    sysrootPromise = fetch('/sysroot.tar')
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(
-            `Unable to load compiler sysroot (${response.status})`
-          );
-        }
-
-        return response.arrayBuffer();
-      })
-      .catch((error) => {
-        sysrootPromise = null;
-        throw error;
-      });
-  }
-
-  return sysrootPromise;
-};
-
-/* ============================================================
-   CREATE COMPILER INVOCATION
-============================================================ */
-
-const createInvocation = async (
-  code: string
-) => {
-  const invocation = await getCompilerInvocation(
-    'main.c',
-    code,
-    []
-  );
-
-  /*
-   * browsercc may provide C++ defaults depending on the
-   * invocation configuration.
-   *
-   * forgebyteX currently treats this compiler as a C compiler,
-   * so remove C++ standard flags before forcing C17.
-   */
-  const cxxStandardFlags = new Set([
-    '-std=c++98',
-    '-std=c++03',
-    '-std=c++11',
-    '-std=c++14',
-    '-std=c++17',
-    '-std=c++20',
-    '-std=c++23',
-
-    '-std=gnu++98',
-    '-std=gnu++03',
-    '-std=gnu++11',
-    '-std=gnu++14',
-    '-std=gnu++17',
-    '-std=gnu++20',
-    '-std=gnu++23',
-  ]);
-
-  invocation.compilerArgs =
-    invocation.compilerArgs.filter(
-      (argument) =>
-        !cxxStandardFlags.has(argument)
-    );
-
-  invocation.compilerArgs.push(
-    '-x',
-    'c',
-    '-std=c17'
-  );
-
-  return invocation;
-};
-
-/* ============================================================
-   COMPILE + RUN
-============================================================ */
-
-async function compileAndRun(
-  code: string,
-  stdinText: string,
-  stdinBuffer: SharedArrayBuffer | null,
+const compileAndRun = async (
+  session: ExecutionSession,
   requestId: string,
-  attempt: number
-): Promise<{
-  success: boolean;
-  output: string;
-  error?: string;
-  warnings?: string;
-  exitCode?: number | null;
-  waitingForInput?: boolean;
-  status: ExecutionStatus;
-  phase: ExecutionPhase;
-}> {
+): Promise<CompilerRunResult> => {
   let compilerStderr = '';
   let linkerStderr = '';
 
-  const post = (event: RuntimeEvent): void => {
-    self.postMessage(event);
-  };
-
-  const emit = (
-    stream: OutputStream,
-    text: string
-  ): void => {
-    if (!text) {
-      return;
-    }
-
-    post({
-      type: 'stream',
-      requestId,
-      stream,
-      text,
-      attempt,
-    });
-  };
-
   try {
-    const [clang, lld, sysroot] = await Promise.all([
-      getClang((text: string) => {
-        compilerStderr += text + '\n';
+    const [clang, linker, sysroot] = await Promise.all([
+      getClang((text) => {
+        compilerStderr += `${text}\n`;
       }),
-      getLld((text: string) => {
-        linkerStderr += text + '\n';
+      getLinker((text) => {
+        linkerStderr += `${text}\n`;
       }),
       getSysroot(),
     ]);
 
-    const invocation = await createInvocation(code);
+    const invocation = await createCompilerInvocation(
+      session.language,
+      session.code,
+    );
 
-    clang.FS.writeFile('main.c', code);
+    const sourceFilename = getSourceFilename(session.language);
+
+    clang.FS.writeFile(sourceFilename, session.code);
     setUpSysroot(clang, sysroot);
 
-    const clangExitCode = clang.callMain(invocation.compilerArgs);
-    if (clangExitCode !== 0) {
+    postStatus(requestId, 'compiling', session.attempt);
+
+    const compileExitCode = clang.callMain(invocation.compilerArgs);
+
+    if (compileExitCode !== 0) {
+      const error = compilerStderr.trim() || 'Compilation failed.';
+
       return {
         success: false,
-        output: compilerStderr.trim() || 'Compilation failed.',
-        error: compilerStderr.trim() || 'Compilation failed.',
-        exitCode: clangExitCode,
+        output: error,
+        error,
+        exitCode: compileExitCode,
         status: 'failed',
         phase: 'compile',
       };
     }
 
-    const objectFile = clang.FS.readFile(invocation.compilerArtifact, {
-      encoding: 'binary',
-    });
+    const objectFile = clang.FS.readFile(
+      invocation.compilerArtifact,
+      { encoding: 'binary' },
+    );
 
-    lld.FS.writeFile(invocation.compilerArtifact, objectFile);
-    setUpSysroot(lld, sysroot);
+    linker.FS.writeFile(invocation.compilerArtifact, objectFile);
+    setUpSysroot(linker, sysroot);
 
-    const lldExitCode = lld.callMain(invocation.linkerArgs);
-    if (lldExitCode !== 0) {
+    postStatus(requestId, 'compiling', session.attempt);
+
+    const linkExitCode = linker.callMain(invocation.linkerArgs);
+
+    if (linkExitCode !== 0) {
+      const error = linkerStderr.trim() || 'Linking failed.';
+
       return {
         success: false,
-        output: linkerStderr.trim() || 'Linking failed.',
-        error: linkerStderr.trim() || 'Linking failed.',
-        exitCode: lldExitCode,
+        output: error,
+        error,
+        exitCode: linkExitCode,
         status: 'failed',
         phase: 'link',
       };
     }
 
-    const executable = lld.FS.readFile(invocation.linerArtifact, {
-      encoding: 'binary',
-    });
+    const executable = linker.FS.readFile(
+      invocation.linerArtifact,
+      { encoding: 'binary' },
+    );
 
     const wasmModule = await WebAssembly.compile(executable);
-
-    let stdinFd: OpenFile;
-
-    if (stdinBuffer) {
-      stdinFd = new SharedStdinOpenFile(stdinBuffer);
-    } else {
-      const stdinFile = new InteractiveStdinFile();
-      const normalizedStdin = stdinText.length > 0 && !stdinText.endsWith('\n')
-        ? `${stdinText}\n`
-        : stdinText;
-
-      stdinFile.append(textEncoder.encode(normalizedStdin));
-      stdinFd = new InteractiveOpenFile(stdinFile);
-    }
-
     const stdoutChunks: string[] = [];
-    const stdoutDecoder = new TextDecoder('utf-8', { fatal: false });
+    const stderrChunks: string[] = [];
+
+    const stdoutDecoder = new TextDecoder();
+    const stderrDecoder = new TextDecoder();
+
     const stdout = new ConsoleStdout((buffer) => {
       const text = stdoutDecoder.decode(buffer, { stream: true });
-      if (text.length > 0) {
+
+      if (text) {
         stdoutChunks.push(text);
-        emit('stdout', text);
+        postStream(
+          requestId,
+          'stdout',
+          text,
+          session.attempt,
+        );
       }
     });
 
-    const stderrChunks: string[] = [];
-    const stderrDecoder = new TextDecoder('utf-8', { fatal: false });
     const stderr = new ConsoleStdout((buffer) => {
       const text = stderrDecoder.decode(buffer, { stream: true });
-      if (text.length > 0) {
+
+      if (text) {
         stderrChunks.push(text);
-        emit('stderr', text);
+        postStream(
+          requestId,
+          'stderr',
+          text,
+          session.attempt,
+        );
       }
     });
 
-    const wasi = new WASI(['main'], [], [
-      stdinFd,
-      stdout,
-      stderr,
-    ]);
+    const wasi = new WASI(
+      ['main'],
+      [],
+      [createStdinFile(session.stdin), stdout, stderr],
+    );
 
     const instance = await WebAssembly.instantiate(wasmModule, {
       wasi_snapshot_preview1: wasi.wasiImport,
     });
 
+    postStatus(requestId, 'running', session.attempt);
+
     let exitCode = 0;
 
     try {
-      post({
-        type: 'status',
-        requestId,
-        status: 'running',
-        attempt,
-      });
-
-      wasi.start(instance as unknown as {
-        exports: {
-          memory: WebAssembly.Memory;
-          _start: () => unknown;
-        };
-      });
-    } catch (error) {
+      wasi.start(
+        instance as unknown as {
+          exports: {
+            memory: WebAssembly.Memory;
+            _start: () => unknown;
+          };
+        },
+      );
+    } catch (error: unknown) {
       if (isStdinRequiredError(error)) {
-        /*
-         * browsercc/WASI cannot suspend and resume the same C stack frame at
-         * scanf(). Report waitingForInput so the client replays the program
-         * from scratch with the accumulated stdin buffer instead.
-         */
         return {
           success: false,
           output: stdoutChunks.join(''),
@@ -413,177 +373,61 @@ async function compileAndRun(
         };
       }
 
-      if (!(error instanceof WASIProcExit)) {
-        const remainingStdout = stdoutDecoder.decode();
-        const remainingStderr = stderrDecoder.decode();
-
-        if (remainingStdout) {
-          stdoutChunks.push(remainingStdout);
-          emit('stdout', remainingStdout);
-        }
-
-        if (remainingStderr) {
-          stderrChunks.push(remainingStderr);
-          emit('stderr', remainingStderr);
-        }
-
-        const runtimeOutput = stdoutChunks.join('');
-        const runtimeError = stderrChunks.join('').trim();
-        const message = error instanceof Error ? error.message : String(error);
-
-        return {
-          success: false,
-          output: runtimeError || runtimeOutput || message,
-          error: runtimeError || message,
-          exitCode: null,
-          status: 'failed',
-          phase: 'run',
-        };
+      if (error instanceof WASIProcExit) {
+        exitCode = error.code;
+      } else {
+        throw error;
       }
-
-      if (error.code !== 0) {
-        const remainingStdout = stdoutDecoder.decode();
-        const remainingStderr = stderrDecoder.decode();
-
-        if (remainingStdout) {
-          stdoutChunks.push(remainingStdout);
-          emit('stdout', remainingStdout);
-        }
-
-        if (remainingStderr) {
-          stderrChunks.push(remainingStderr);
-          emit('stderr', remainingStderr);
-        }
-
-        const runtimeError = stderrChunks.join('').trim();
-        const output = stdoutChunks.join('');
-
-        return {
-          success: false,
-          output: runtimeError || output || `Program exited with code ${error.code}.`,
-          error: runtimeError || `Program exited with code ${error.code}.`,
-          exitCode: error.code,
-          status: 'failed',
-          phase: 'run',
-        };
-      }
-
-      exitCode = error.code;
-    }
-
-    const remainingStdout = stdoutDecoder.decode();
-    const remainingStderr = stderrDecoder.decode();
-
-    if (remainingStdout) {
-      stdoutChunks.push(remainingStdout);
-      emit('stdout', remainingStdout);
-    }
-
-    if (remainingStderr) {
-      stderrChunks.push(remainingStderr);
-      emit('stderr', remainingStderr);
     }
 
     const output = stdoutChunks.join('');
     const runtimeError = stderrChunks.join('').trim();
 
-    if (runtimeError) {
+    if (runtimeError || exitCode !== 0) {
+      const error =
+        runtimeError || `Program exited with code ${exitCode}.`;
+
       return {
         success: false,
-        output: output || runtimeError,
-        error: runtimeError,
+        output: output || error,
+        error,
         exitCode,
         status: 'failed',
         phase: 'run',
       };
     }
 
-    const compilerWarnings = compilerStderr.trim();
-
     return {
       success: true,
       output,
-      warnings: compilerWarnings || undefined,
+      warnings: compilerStderr.trim() || undefined,
       exitCode,
       status: 'completed',
       phase: 'run',
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const compilerError = compilerStderr.trim();
-    const linkerError = linkerStderr.trim();
-    const errorMessage = compilerError || linkerError || message;
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    const finalError =
+      compilerStderr.trim() || linkerStderr.trim() || message;
 
     return {
       success: false,
-      output: errorMessage,
-      error: errorMessage,
+      output: finalError,
+      error: finalError,
       exitCode: null,
       status: 'failed',
       phase: 'compile',
     };
   }
-}
-
-/* ============================================================
-   WORKER MESSAGE HANDLER
-   ============================================================ */
-
-type Session = {
-  code: string;
-  stdin: string;
-  stdinBuffer: SharedArrayBuffer | null;
-  attempt: number;
 };
 
-const executionSessions = new Map<string, Session>();
-
-/*
- * All executions for this worker are funneled through a serial queue.
- * A resumed (interactive stdin) run must never interleave with another
- * pending resume for the same or a different session: WASM execution
- * is synchronous once started, but the async setup steps would
- * otherwise allow two runSessions to overlap at await points.
- */
-let executionChain: Promise<void> = Promise.resolve();
-
-const enqueueExecution = (task: () => Promise<void>): void => {
-  executionChain = executionChain.then(task, task);
-};
-
-const finishRun = (
+const finishSession = (
   requestId: string,
-  attempt: number,
-  result: Awaited<ReturnType<typeof compileAndRun>>
+  session: ExecutionSession,
+  result: CompilerRunResult,
 ): void => {
-  if (result.waitingForInput) {
-    /*
-     * Single message tells the client everything: stay alive, pause
-     * the watchdog, surface 'waiting-input'.
-     */
-    self.postMessage({
-      type: 'result',
-      requestId,
-      success: false,
-      output: result.output,
-      error: result.error,
-      warnings: result.warnings,
-      exitCode: result.exitCode ?? null,
-      waitingForInput: true,
-      status: 'waiting-input',
-      phase: result.phase,
-    } satisfies RuntimeEvent);
-    return;
-  }
-
-  self.postMessage({
-    type: 'status',
-    requestId,
-    status: result.status,
-    attempt,
-  } satisfies RuntimeEvent);
-
-  self.postMessage({
+  postEvent({
     type: 'result',
     requestId,
     success: result.success,
@@ -591,147 +435,106 @@ const finishRun = (
     error: result.error,
     warnings: result.warnings,
     exitCode: result.exitCode ?? null,
-    waitingForInput: false,
+    waitingForInput: result.waitingForInput ?? false,
     status: result.status,
     phase: result.phase,
-  } satisfies RuntimeEvent);
+  });
 
-  executionSessions.delete(requestId);
+  if (result.waitingForInput) {
+    session.attempt += 1;
+  } else {
+    executionSessions.delete(requestId);
+  }
 };
 
 const runSession = async (
   requestId: string,
-  session: Session
+  session: ExecutionSession,
 ): Promise<void> => {
-  const attempt = session.attempt;
+  const result = await compileAndRun(session, requestId);
+  finishSession(requestId, session, result);
+};
 
-  if (attempt === 1) {
-    self.postMessage({
-      type: 'status',
-      requestId,
-      status: 'compiling',
-      attempt,
-    } satisfies RuntimeEvent);
-  }
+const failSession = (
+  requestId: string,
+  attempt: number,
+  error: unknown,
+): void => {
+  const message = error instanceof Error ? error.message : String(error);
 
-  const result = await compileAndRun(
-    session.code,
-    session.stdin,
-    session.stdinBuffer,
+  postStatus(requestId, 'failed', attempt);
+  postEvent({
+    type: 'result',
     requestId,
-    attempt
-  );
+    success: false,
+    output: message,
+    error: message,
+    exitCode: null,
+    waitingForInput: false,
+    status: 'failed',
+    phase: 'run',
+  });
 
-  if (result.waitingForInput) {
-    session.attempt += 1;
+  executionSessions.delete(requestId);
+};
+
+const handleCompile = (
+  request: Extract<RuntimeRequest, { type: 'compile' }>,
+): void => {
+  const session: ExecutionSession = {
+    code: request.code,
+    language: request.language === 'cpp' ? 'cpp' : 'c',
+    stdin: request.stdin ?? '',
+    attempt: 1,
+  };
+
+  executionSessions.set(request.requestId, session);
+
+  enqueue(async () => {
+    try {
+      await runSession(request.requestId, session);
+    } catch (error: unknown) {
+      failSession(request.requestId, session.attempt, error);
+    }
+  });
+};
+
+const handleStdin = (
+  request: Extract<RuntimeRequest, { type: 'stdin' }>,
+): void => {
+  const session = executionSessions.get(request.requestId);
+
+  if (!session) {
+    return;
   }
 
-  finishRun(requestId, attempt, result);
+  session.stdin += `${request.input}\n`;
+
+  enqueue(async () => {
+    try {
+      await runSession(request.requestId, session);
+    } catch (error: unknown) {
+      failSession(request.requestId, session.attempt, error);
+    }
+  });
 };
 
 self.addEventListener(
   'message',
-  (
-    event: MessageEvent<RuntimeRequest>
-  ) => {
-    const data = event.data;
+  (event: MessageEvent<RuntimeRequest>) => {
+    const request = event.data;
 
-    if (!data) {
+    if (!request) {
       return;
     }
 
-    if (data.type === 'stdin') {
-      const session = executionSessions.get(data.requestId);
-      if (!session) {
-        // Unknown/expired session: stale message, drop it.
-        return;
-      }
-
-      if (session.stdinBuffer) {
-        // Shared-memory stdin is written directly from the client, so
-        // worker-side stdin messages are only used by the legacy fallback.
-        return;
-      }
-
-      session.stdin += data.input;
-
-      enqueueExecution(async () => {
-        try {
-          await runSession(data.requestId, session);
-        } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : String(error);
-
-          self.postMessage({
-            type: 'status',
-            requestId: data.requestId,
-            status: 'failed',
-            attempt: session.attempt,
-          } satisfies RuntimeEvent);
-
-          self.postMessage({
-            type: 'result',
-            requestId: data.requestId,
-            success: false,
-            output: message,
-            error: message,
-            exitCode: null,
-            waitingForInput: false,
-            status: 'failed',
-            phase: 'run',
-          } satisfies RuntimeEvent);
-
-          executionSessions.delete(data.requestId);
-        }
-      });
+    if (request.type === 'stdin') {
+      handleStdin(request);
       return;
     }
 
-    if (data.type !== 'compile') {
-      return;
+    if (request.type === 'compile') {
+      handleCompile(request);
     }
-
-    const session: Session = {
-      code: data.code,
-      stdin: data.stdin ?? '',
-      stdinBuffer: data.stdinBuffer ?? null,
-      attempt: 1,
-    };
-
-    executionSessions.set(data.requestId, session);
-
-    enqueueExecution(async () => {
-      try {
-        await runSession(data.requestId, session);
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
-
-        self.postMessage({
-          type: 'status',
-          requestId: data.requestId,
-          status: 'failed',
-          attempt: 1,
-        } satisfies RuntimeEvent);
-
-        self.postMessage({
-          type: 'result',
-          requestId: data.requestId,
-          success: false,
-          output: message,
-          error: message,
-          exitCode: null,
-          waitingForInput: false,
-          status: 'failed',
-          phase: 'compile',
-        } satisfies RuntimeEvent);
-
-        executionSessions.delete(data.requestId);
-      }
-    });
-  }
+  },
 );

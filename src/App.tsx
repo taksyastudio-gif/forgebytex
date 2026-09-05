@@ -1,414 +1,349 @@
-import React, {
+import {
   useCallback,
   useEffect,
   useRef,
   useState,
+  type ReactElement,
 } from 'react';
+import {
+  Group as PanelGroup,
+  Panel,
+  Separator as PanelResizeHandle,
+} from 'react-resizable-panels';
+import type * as monaco from 'monaco-editor';
 
+import { CodeEditor } from './components/CodeEditor';
+import { ConsolePreviewPanel } from './components/ConsolePreviewPanel';
+import {
+  FileExplorer,
+  type ProjectFile,
+} from './components/FileExplorer';
+import { FeedbackModal } from './components/FeedbackModal';
 import { HeaderControls } from './components/HeaderControls';
-import { FileExplorer } from './components/FileExplorer';
-import { EditorSkeleton } from './components/EditorSkeleton';
+import { NebCurriculumModal } from './components/NebCurriculumModal';
+import { ExportModal } from './components/ExportModal';
+import {
+  WelcomeModal,
+  shouldShowWelcome,
+} from './components/WelcomeModal';
 
-const CodeEditor = React.lazy(() => import('./components/CodeEditor'));
+import { ExecutionClient } from './compiler/execution-client';
+import type {
+  ExecutionStatus,
+  SupportedLanguage as RuntimeLanguage,
+} from './compiler/execution-protocol';
+
 import {
-  interpretCompilerOutput,
-  interpretPythonError,
-} from './utils/error-interpreter';
+  nebPrograms,
+  type NebProgram,
+} from './data/nebGrade12Curriculum';
+
 import {
-  applyMonacoMarkers,
   clearMonacoMarkers,
   goToLineColumn,
+  parseAndApplyDiagnostics,
 } from './utils/monacoDiagnostics';
-import { ConsolePreviewPanel } from './components/ConsolePreviewPanel';
-import { FriendlyErrorPanel } from './components/FriendlyErrorPanel';
-import { NebCurriculumModal } from './components/NebCurriculumModal';
-import { FeedbackModal } from './components/FeedbackModal';
-import { WelcomeModal, shouldShowWelcome } from './components/WelcomeModal';
-import { nebPrograms } from './data/nebGrade12Curriculum';
+
 import {
-  compilerClient,
-} from './compiler/compiler-client';
+  buildWebPreview,
+  isWebProjectFile,
+} from './utils/webPreview';
+
 import {
-  pythonClient,
-} from './compiler/python-client';
-import type { ExecutionStatus } from './compiler/execution-protocol';
+  getLanguageFromFilename,
+  isPreviewLanguage,
+} from './utils/fileUtils';
 
 import type {
-  FileItem,
-  ProgramInputItem,
-  SupportedLanguage,
   EditorTheme,
+  FileItem,
+  SupportedLanguage,
   TerminalPosition,
 } from './types/byteplay';
 
-import type { FriendlyError } from './utils/error-interpreter';
+type ForgeProjectFile = FileItem;
 
-const INITIAL_FILES: FileItem[] = [
+const INITIAL_FILES: ForgeProjectFile[] = [
   {
-    id: '1',
+    id: 'main-c',
     name: 'main.c',
     language: 'c',
     content: `#include <stdio.h>
 
-int main() {
-    printf("Hello forgebyteX!\\n");
+int main(void) {
+    printf("Hello ForgeByteX from C!\\n");
     return 0;
-}`,
+}
+`,
   },
   {
-    id: '2',
-    name: 'index.html',
-    language: 'html',
-    content: `<h1>Hello forgebyteX</h1>
-<p>Interactive Web Sandbox</p>`,
+    id: 'main-cpp',
+    name: 'main.cpp',
+    language: 'cpp',
+    content: `#include <iostream>
+
+int main() {
+    std::cout << "Hello ForgeByteX from C++!" << std::endl;
+    return 0;
+}
+`,
   },
   {
-    id: '3',
+    id: 'main-py',
     name: 'main.py',
     language: 'python',
-    content: `print("Hello from Python in forgebyteX!")
+    content: `print("Hello ForgeByteX from Python!")
 
-for i in range(5):
-    print(i)`,
+for index in range(5):
+    print(index)
+`,
   },
   {
-    id: '4',
+    id: 'index-html',
+    name: 'index.html',
+    language: 'html',
+    isWebProjectFile: true,
+    content: `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ForgeByteX Web Project</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="card">
+    <h1>Hello ForgeByteX!</h1>
+    <p>Edit index.html, style.css, and script.js together.</p>
+    <button id="demo-button" type="button">Click me</button>
+    <p id="message"></p>
+  </main>
+
+  <script src="./script.js"></script>
+</body>
+</html>
+`,
+  },
+  {
+    id: 'style-css',
     name: 'style.css',
     language: 'css',
-    content: `/* Custom CSS Styles */
-body {
-  font-family: system-ui, sans-serif;
+    isWebProjectFile: true,
+    content: `:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, sans-serif;
   background: #0f172a;
   color: #f8fafc;
-}`,
+}
+
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  background: linear-gradient(135deg, #0f172a, #1e1b4b);
+}
+
+.card {
+  width: min(90vw, 520px);
+  padding: 2rem;
+  border: 1px solid #475569;
+  border-radius: 1rem;
+  background: rgb(15 23 42 / 85%);
+  text-align: center;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 35%);
+}
+
+button {
+  border: 0;
+  border-radius: 0.5rem;
+  padding: 0.65rem 1rem;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+}
+`,
   },
   {
-    id: '5',
+    id: 'script-js',
     name: 'script.js',
     language: 'javascript',
-    content: `// JavaScript Sandbox
-console.log("Hello from JavaScript in forgebyteX!");`,
+    isWebProjectFile: true,
+    content: `const button = document.querySelector('#demo-button');
+const message = document.querySelector('#message');
+
+button?.addEventListener('click', () => {
+  message.textContent = 'JavaScript is connected successfully.';
+});
+`,
   },
 ];
 
 const INITIAL_TERMINAL_LOGS = [
-  'forgebyteX ready. Open a file and click Run Code (or press F5).',
+  'ForgeByteX ready. Open a file and click Run Code.',
+  'Tip: C and Python input is typed directly into this terminal.',
 ];
 
 const THEME_STORAGE_KEY = 'forgebytex-theme';
 
-const isEditorTheme = (value: string | null): value is EditorTheme =>
-  value === 'black' || value === 'white' || value === 'cyberpunk';
+const createFileId = (): string =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+const isEditorTheme = (
+  value: string | null,
+): value is EditorTheme =>
+  value === 'black' ||
+  value === 'white' ||
+  value === 'cyberpunk';
 
 const getInitialTheme = (): EditorTheme => {
   if (typeof window === 'undefined') {
     return 'black';
   }
 
-  const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  const savedTheme = window.localStorage.getItem(
+    THEME_STORAGE_KEY,
+  );
 
-  return isEditorTheme(storedTheme) ? storedTheme : 'black';
+  return isEditorTheme(savedTheme) ? savedTheme : 'black';
 };
 
-const BUGGY_C_CODE = `#include <stdio.h>
-
-int main() {
-    printf("Hello forgebyteX!\\n")
-    return 0;
-}`;
-
-const BUGGY_HTML_CODE = `<div>
-  <h1>Hello forgebyteX</h1>
-  <p style="color: cyan">Missing closing tags
-</div>`;
-
-const createFileId = () =>
-  `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-const getFileExtension = (language: SupportedLanguage) => {
+const getExtensionForLanguage = (
+  language: SupportedLanguage,
+): string => {
   switch (language) {
     case 'c':
       return 'c';
-
-    case 'html':
-      return 'html';
-
+    case 'cpp':
+      return 'cpp';
     case 'python':
       return 'py';
-
+    case 'html':
+      return 'html';
     case 'css':
       return 'css';
-
     case 'javascript':
       return 'js';
-
     case 'sql':
       return 'sql';
-
-    case 'plaintext':
     default:
       return 'txt';
   }
 };
 
-export const App: React.FC = () => {
-  /* ============================================================
-     GLOBAL EDITOR STATE
-  ============================================================ */
+const toRuntimeLanguage = (
+  language: SupportedLanguage,
+): RuntimeLanguage => language;
+
+export const App = (): ReactElement => {
+  const [files, setFiles] =
+    useState<ForgeProjectFile[]>(INITIAL_FILES);
+  const [activeFileId, setActiveFileId] =
+    useState(INITIAL_FILES[0].id);
 
   const [activeLanguage, setActiveLanguage] =
-    useState<SupportedLanguage>('c');
+    useState<SupportedLanguage>(INITIAL_FILES[0].language);
 
   const [activeTheme, setActiveTheme] =
     useState<EditorTheme>(getInitialTheme);
 
-  const [isRunning, setIsRunning] = useState(false);
-  const [executionStatus, setExecutionStatus] = useState<ExecutionStatus>('idle');
-  const [isNebModalOpen, setIsNebModalOpen] = useState(false);
-  const [isFocusMode, setIsFocusMode] = useState(false);
-  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
-  const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(shouldShowWelcome());
-  const [terminalPosition, setTerminalPosition] = useState<TerminalPosition>('bottom');
+  const [terminalPosition, setTerminalPosition] =
+    useState<TerminalPosition>('bottom');
 
   const [terminalLogs, setTerminalLogs] = useState<string[]>(
-    INITIAL_TERMINAL_LOGS
+    INITIAL_TERMINAL_LOGS,
   );
-  /**
-   * Incrementing this counter tells InteractiveTerminal to hard-clear
-   * itself, bypassing the append-only logic.
-   */
+
   const [clearGeneration, setClearGeneration] = useState(0);
+  const [executionStatus, setExecutionStatus] =
+    useState<ExecutionStatus>('idle');
+  const [isRunning, setIsRunning] = useState(false);
 
-  const [queuedInput, setQueuedInput] = useState<string[]>([]);
-  const [programInputs, setProgramInputs] =
-    useState<ProgramInputItem[]>([]);
+  const [errorOutput, setErrorOutput] = useState('');
 
-  const [htmlPreviewDoc, setHtmlPreviewDoc] =
-    useState<string | null>(null);
+  const [htmlPreviewDoc, setHtmlPreviewDoc] = useState<
+    string | null
+  >(null);
 
-  const [isExplorerCollapsed, setIsExplorerCollapsed] =
+  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [isWelcomeOpen, setIsWelcomeOpen] =
+    useState(shouldShowWelcome);
+  const [isCurriculumOpen, setIsCurriculumOpen] =
     useState(false);
+  const [isExportOpen, setIsExportOpen] = useState(false);
 
-  const [terminalSize, setTerminalSize] =
-    useState(280);
-
-  /* ============================================================
-     FILE STATE
-  ============================================================ */
-
-  const [files, setFiles] =
-    useState<FileItem[]>(INITIAL_FILES);
-
-  const [activeFileId, setActiveFileId] =
-    useState<string>('1');
-
-  /* ============================================================
-     EDITOR REFERENCES
-  ============================================================ */
+  const executionClientRef =
+    useRef<ExecutionClient | null>(null);
 
   const monacoRef =
-    useRef<typeof import('monaco-editor') | null>(
-      null
-    );
+    useRef<typeof monaco | null>(null);
+
   const editorRef =
-    useRef<import('monaco-editor').editor.IStandaloneCodeEditor | null>(
-      null
+    useRef<monaco.editor.IStandaloneCodeEditor | null>(
+      null,
     );
+
   const executionGenerationRef = useRef(0);
-
-  useEffect(() => {
-    const stopRuntime = () => {
-      compilerClient.terminate();
-      pythonClient.terminate();
-    };
-
-    window.addEventListener('pagehide', stopRuntime);
-    return () => window.removeEventListener('pagehide', stopRuntime);
-  }, []);
-
-  const handleEditorMount = useCallback(
-    (
-      editor: import('monaco-editor').editor.IStandaloneCodeEditor,
-      monaco: typeof import('monaco-editor')
-    ) => {
-      editorRef.current = editor;
-      monacoRef.current = monaco;
-    },
-    []
-  );
-
-  /* ============================================================
-     ERROR STATE
-  ============================================================ */
-
-  const [errors, setErrors] =
-    useState<FriendlyError[]>([]);
-
-  const [selectedErrorId, setSelectedErrorId] =
-    useState<string | null>(null);
-
-  const [showRawError, setShowRawError] =
-    useState(false);
-
-  const clearErrorState = useCallback(() => {
-    setErrors([]);
-    setSelectedErrorId(null);
-    setShowRawError(false);
-
-    if (monacoRef.current && editorRef.current) {
-     clearMonacoMarkers(
-       monacoRef.current,
-       editorRef.current
-     );
-    }
-  }, []);
-
-  /* ============================================================
-     RESIZER (VERTICAL & HORIZONTAL RESIZE FOR TERMINAL SIZE)
-  ============================================================ */
-
-  const isDraggingRef = useRef(false);
-
-  const handleMouseDown = useCallback(() => {
-    isDraggingRef.current = true;
-
-    const cursor = terminalPosition === 'bottom' ? 'row-resize' : 'col-resize';
-    document.body.style.cursor = cursor;
-    document.body.style.userSelect = 'none';
-  }, [terminalPosition]);
-
-  const handleMouseMove = useCallback((event: MouseEvent) => {
-    if (!isDraggingRef.current) {
-      return;
-    }
-
-    const minimumTerminalSize = 120;
-    const minimumEditorSize = 180;
-
-    if (terminalPosition === 'bottom') {
-      // Vertical resize
-      const newHeight = window.innerHeight - event.clientY;
-      const maximumTerminalHeight = Math.max(
-        minimumTerminalSize,
-        window.innerHeight - minimumEditorSize
-      );
-
-      const clampedHeight = Math.min(
-        Math.max(newHeight, minimumTerminalSize),
-        maximumTerminalHeight
-      );
-
-      setTerminalSize(clampedHeight);
-    } else {
-      // Horizontal resize
-      const newWidth = window.innerWidth - event.clientX;
-      const maximumTerminalWidth = Math.max(
-        minimumTerminalSize,
-        window.innerWidth - minimumEditorSize
-      );
-
-      const clampedWidth = Math.min(
-        Math.max(newWidth, minimumTerminalSize),
-        maximumTerminalWidth
-      );
-
-      setTerminalSize(clampedWidth);
-    }
-  }, [terminalPosition]);
-
-  const handleMouseUp = useCallback(() => {
-    if (!isDraggingRef.current) {
-      return;
-    }
-
-    isDraggingRef.current = false;
-
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  }, []);
-
-  /* ============================================================
-     EXECUTION STATE
-  ============================================================ */
-
-  const executionTimerRef =
-    useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  /* ============================================================
-     ACTIVE FILE
-  ============================================================ */
 
   const activeFile =
     files.find((file) => file.id === activeFileId) ??
-    files[0] ??
-    null;
+    files[0];
+
+  useEffect(() => {
+    executionClientRef.current = new ExecutionClient();
+
+    const handlePageHide = (): void => {
+      executionClientRef.current?.terminate();
+    };
+
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      window.removeEventListener(
+        'pagehide',
+        handlePageHide,
+      );
+      executionClientRef.current?.terminate();
+      executionClientRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = activeTheme;
     window.localStorage.setItem(
       THEME_STORAGE_KEY,
-      activeTheme
+      activeTheme,
     );
   }, [activeTheme]);
 
-  useEffect(() => {
-    const executionTimer = executionTimerRef.current;
-
-    window.addEventListener(
-      'mousemove',
-      handleMouseMove
-    );
-
-    window.addEventListener(
-      'mouseup',
-      handleMouseUp
-    );
-
-    return () => {
-      window.removeEventListener(
-        'mousemove',
-        handleMouseMove
+  const clearDiagnostics = useCallback((): void => {
+    if (monacoRef.current && editorRef.current) {
+      clearMonacoMarkers(
+        monacoRef.current,
+        editorRef.current,
       );
-
-      window.removeEventListener(
-        'mouseup',
-        handleMouseUp
-      );
-
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-
-      if (executionTimer) {
-        clearTimeout(executionTimer);
-      }
-    };
-  }, [handleMouseMove, handleMouseUp]);
-
-  /* ============================================================
-     KEYBOARD SHORTCUT — F5 to Run
-  ============================================================ */
-
-  const handleRunRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F5') {
-        e.preventDefault();
-        handleRunRef.current();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    }
   }, []);
 
-  /* ============================================================
-     FILE SELECTION
-  ============================================================ */
+  const appendTerminalLog = useCallback(
+    (text: string): void => {
+      if (!text) {
+        return;
+      }
 
-  const handleFileSelect = useCallback(
-    (fileId: string) => {
+      setTerminalLogs((currentLogs) => [
+        ...currentLogs,
+        text,
+      ]);
+    },
+    [],
+  );
+
+  const handleSelectFile = useCallback(
+    (fileId: string): void => {
       const selectedFile = files.find(
-        (file) => file.id === fileId
+        (file) => file.id === fileId,
       );
 
       if (!selectedFile) {
@@ -416,897 +351,583 @@ export const App: React.FC = () => {
       }
 
       setActiveFileId(fileId);
-
-      /*
-       * The file's language becomes the source of truth
-       * whenever the user switches files.
-       */
       setActiveLanguage(selectedFile.language);
-
-      clearErrorState();
-
-      /*
-       * Avoid showing an old HTML preview after changing files.
-       */
       setHtmlPreviewDoc(null);
+      setErrorOutput('');
+      clearDiagnostics();
     },
-      [clearErrorState, files]
+    [clearDiagnostics, files],
   );
 
-  /* ============================================================
-     CODE CHANGE
-  ============================================================ */
+  const handleUpdateCode = useCallback(
+    (content: string): void => {
+      setFiles((currentFiles) =>
+        currentFiles.map((file) =>
+          file.id === activeFileId
+            ? { ...file, content }
+            : file,
+        ),
+      );
 
-  const handleCodeChange = useCallback(
-    (newContent: string) => {
-      if (!activeFile) {
+      clearDiagnostics();
+      setErrorOutput('');
+
+      if (activeFile && isWebProjectFile(activeFile)) {
+        setHtmlPreviewDoc(null);
+      }
+    },
+    [activeFile, activeFileId, clearDiagnostics],
+  );
+
+  const handleAddFile = useCallback((): void => {
+    const language: SupportedLanguage = 'javascript';
+    const extension = getExtensionForLanguage(language);
+    const fileName = `script-${files.length + 1}.${extension}`;
+
+    const newFile: ForgeProjectFile = {
+      id: createFileId(),
+      name: fileName,
+      language,
+      isWebProjectFile: true,
+      content: '// New ForgeByteX file\n',
+    };
+
+    setFiles((currentFiles) => [
+      ...currentFiles,
+      newFile,
+    ]);
+    setActiveFileId(newFile.id);
+    setActiveLanguage(newFile.language);
+    setHtmlPreviewDoc(null);
+    setErrorOutput('');
+    clearDiagnostics();
+  }, [clearDiagnostics, files.length]);
+
+  const handleRenameFile = useCallback(
+    (fileId: string, newName: string): void => {
+      const trimmedName = newName.trim();
+
+      if (!trimmedName) {
         return;
       }
 
-      setFiles((previousFiles) =>
-        previousFiles.map((file) =>
-          file.id === activeFile.id
+      setFiles((currentFiles) =>
+        currentFiles.map((file) =>
+          file.id === fileId
             ? {
                 ...file,
-                content: newContent,
+                name: trimmedName,
+                language:
+                  getLanguageFromFilename(trimmedName),
+                isWebProjectFile:
+                  isWebProjectFile({
+                    language:
+                      getLanguageFromFilename(trimmedName),
+                  }),
               }
-            : file
-        )
+            : file,
+        ),
       );
 
-      /*
-       * Editing invalidates previous diagnostics.
-       * Clear UI markers as well.
-       */
-      clearErrorState();
+      setHtmlPreviewDoc(null);
+      setErrorOutput('');
     },
-      [activeFile, clearErrorState]
+    [],
   );
 
-  /* ============================================================
-     LANGUAGE SELECTION
-  ============================================================ */
+  const handleDeleteFile = useCallback(
+    (fileId: string): void => {
+      if (files.length <= 1) {
+        return;
+      }
+
+      const remainingFiles = files.filter(
+        (file) => file.id !== fileId,
+      );
+
+      setFiles(remainingFiles);
+
+      if (fileId === activeFileId) {
+        const nextFile = remainingFiles[0];
+
+        setActiveFileId(nextFile.id);
+        setActiveLanguage(nextFile.language);
+      }
+
+      setHtmlPreviewDoc(null);
+      setErrorOutput('');
+      clearDiagnostics();
+    },
+    [
+      activeFileId,
+      clearDiagnostics,
+      files,
+    ],
+  );
 
   const handleLanguageSelect = useCallback(
-    (targetLang: SupportedLanguage) => {
-      setActiveLanguage(targetLang);
+    (language: SupportedLanguage): void => {
+      setActiveLanguage(language);
+      setErrorOutput('');
 
-      setFiles((currentFiles) => {
-        const matchingFile = currentFiles.find(
-          (f) => f.language === targetLang
-        );
+      const matchingFile = files.find(
+        (file) => file.language === language,
+      );
 
-        if (matchingFile) {
-          setActiveFileId(matchingFile.id);
-          return currentFiles;
-        }
+      if (matchingFile) {
+        setActiveFileId(matchingFile.id);
+        return;
+      }
 
-        const ext = getFileExtension(targetLang);
-        const existingNames = new Set(currentFiles.map((f) => f.name));
-        let idx = 1;
-        let filename = `untitled-${idx}.${ext}`;
-        while (existingNames.has(filename)) {
-          idx += 1;
-          filename = `untitled-${idx}.${ext}`;
-        }
+      const extension = getExtensionForLanguage(language);
+      const newFile: ForgeProjectFile = {
+        id: createFileId(),
+        name: `untitled-${files.length + 1}.${extension}`,
+        language,
+        isWebProjectFile: isWebProjectFile({ language }),
+        content: '',
+      };
 
-        const newFile: FileItem = {
-          id: createFileId(),
-          name: filename,
-          language: targetLang,
-          content: '',
-        };
-
-        setActiveFileId(newFile.id);
-        return [...currentFiles, newFile];
-      });
-
-      setErrors([]);
-      setSelectedErrorId(null);
-      setHtmlPreviewDoc(null);
+      setFiles((currentFiles) => [
+        ...currentFiles,
+        newFile,
+      ]);
+      setActiveFileId(newFile.id);
     },
-    []
+    [files],
   );
 
-  /* ============================================================
-     RUN CODE
-  ============================================================ */
+  const handleSendInput = useCallback(
+    (input: string): void => {
+      const sent =
+        executionClientRef.current?.sendInput(input) ??
+        false;
 
-  const handleRun = useCallback(() => {
-    if (!activeFile) {
+      if (!sent) {
+        appendTerminalLog(
+          '[ForgeByteX] No program is currently waiting for input.',
+        );
+      }
+    },
+    [appendTerminalLog],
+  );
+
+  const handleRun = useCallback(async (): Promise<void> => {
+    const executionClient = executionClientRef.current;
+
+    if (!activeFile || !executionClient) {
       return;
     }
 
-    // ── Stop a running execution ──────────────────────────────
     if (isRunning) {
       executionGenerationRef.current += 1;
-      if (activeLanguage === 'c') {
-        compilerClient.stopCurrent();
-      } else if (activeLanguage === 'python') {
-        pythonClient.stopCurrent();
-      }
+      executionClient.stop();
       setIsRunning(false);
       setExecutionStatus('stopped');
-      clearTransientInput();
-      setTerminalLogs((prev) => [
-        ...prev,
-        '> Execution stopped.',
+      setErrorOutput('');
+      appendTerminalLog(
+        '[ForgeByteX] Execution stopped by the user.',
+      );
+      return;
+    }
+
+    clearDiagnostics();
+    setErrorOutput('');
+
+    const generation = ++executionGenerationRef.current;
+    const isCurrentExecution = (): boolean =>
+      executionGenerationRef.current === generation;
+
+    if (isPreviewLanguage(activeFile.language)) {
+      const preview = buildWebPreview(files);
+
+      setHtmlPreviewDoc(preview.document || null);
+      setExecutionStatus(
+        preview.diagnostics.some(
+          (diagnostic) => diagnostic.severity === 'error',
+        )
+          ? 'failed'
+          : 'completed',
+      );
+
+      setTerminalLogs((currentLogs) => [
+        ...currentLogs,
+        `Rendered ${preview.entryFileName || 'web project'} preview.`,
       ]);
+
       return;
     }
 
     setIsRunning(true);
-    setExecutionStatus('compiling');
-    clearErrorState();
-    const executionGeneration = ++executionGenerationRef.current;
-    const isCurrentExecution = () =>
-      executionGenerationRef.current === executionGeneration;
+    setExecutionStatus('preparing');
 
-    // Clear transient stdin state before each run so queued input from one
-    // execution cannot leak into the next language or retry.
-    function clearTransientInput() {
-      setQueuedInput([]);
-    }
+    appendTerminalLog(
+      `> Starting ${activeFile.name}...`,
+    );
 
-    // ── HTML preview path ─────────────────────────────────────
-    if (activeLanguage === 'html' || activeFile.language === 'html' || activeFile.language === 'css' || activeFile.language === 'javascript') {
-      const htmlFile = files.find((f) => f.language === 'html');
-      const cssFile = files.find((f) => f.language === 'css');
-      const jsFile = files.find((f) => f.language === 'javascript');
+    try {
+      const result = await executionClient.execute(
+        {
+          fileName: activeFile.name,
+          code: activeFile.content,
+          language: toRuntimeLanguage(
+            activeFile.language,
+          ),
+        },
+        {
+          onOutput: (_stream, text, attempt) => {
+            if (!isCurrentExecution() || !text) {
+              return;
+            }
 
-      let combinedDoc = htmlFile ? htmlFile.content : activeFile.content;
-      if (cssFile && combinedDoc.includes('</head>')) {
-        combinedDoc = combinedDoc.replace('</head>', `<style>${cssFile.content}</style></head>`);
+            appendTerminalLog(
+              attempt > 1
+                ? `[input retry ${attempt}] ${text}`
+                : text,
+            );
+          },
+          onStatus: (status) => {
+            if (isCurrentExecution()) {
+              setExecutionStatus(status);
+            }
+          },
+        },
+      );
+
+      if (!isCurrentExecution()) {
+        return;
       }
-      if (jsFile && combinedDoc.includes('</body>')) {
-        combinedDoc = combinedDoc.replace('</body>', `<script>${jsFile.content}</script></body>`);
-      }
 
-      setHtmlPreviewDoc(combinedDoc);
-      setTerminalLogs((prev) => [
-        ...prev,
-        `> Rendering web project preview...`,
-        'HTML/CSS/JS preview updated.',
-      ]);
+      setExecutionStatus(result.status);
       setIsRunning(false);
-      setExecutionStatus('completed');
-      return;
+
+      if (!result.success) {
+        const diagnosticText =
+          result.error ||
+          result.output ||
+          'Unknown execution error.';
+
+        setErrorOutput(diagnosticText);
+
+        if (monacoRef.current && editorRef.current) {
+          parseAndApplyDiagnostics(
+            monacoRef.current,
+            editorRef.current,
+            diagnosticText,
+            activeFile.language,
+          );
+        }
+      } else if (result.warnings) {
+        appendTerminalLog(result.warnings);
+      }
+    } catch (error: unknown) {
+      if (!isCurrentExecution()) {
+        return;
+      }
+
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Execution failed unexpectedly.';
+
+      setExecutionStatus('failed');
+      setIsRunning(false);
+      setErrorOutput(message);
     }
-
-    // ── C compilation path ────────────────────────────────────
-    if (activeLanguage === 'c') {
-      const stdin = [
-        ...programInputs.map((input) => input.value),
-        ...queuedInput,
-      ].join('\n');
-      clearTransientInput();
-
-      let baseLogLength = 0;
-      let highestAttempt = 1;
-
-      setTerminalLogs((prev) => {
-        baseLogLength = prev.length + 1;
-        return [...prev, `> Compiling ${activeFile.name}…`];
-      });
-
-      const code = activeFile.content;
-
-      compilerClient
-        .compile(
-          code,
-          stdin,
-          // ── Streaming stdout/stderr callback ──────────────
-          { onOutput: (_stream: 'stdout' | 'stderr', text: string, attempt = 1) => {
-            if (!isCurrentExecution()) return;
-            if (!text) return;
-            setTerminalLogs((prev) => {
-              if (attempt > highestAttempt) {
-                highestAttempt = attempt;
-                return [...prev.slice(0, baseLogLength), text];
-              }
-              return [...prev, text];
-            });
-          },
-          // ── Status update callback ────────────────────────
-          onStatus: (status: ExecutionStatus) => {
-            if (!isCurrentExecution()) return;
-            setExecutionStatus(status);
-            if (
-              status === 'completed' ||
-              status === 'failed' ||
-              status === 'stopped' ||
-              status === 'timeout'
-            ) {
-              setIsRunning(false);
-            }
-          }}
-        )
-        .then((result) => {
-          if (!isCurrentExecution()) return;
-          const finalStatus =
-            result.status ??
-            (result.success ? 'completed' : 'failed');
-
-          setExecutionStatus(finalStatus);
-          setIsRunning(false);
-          clearTransientInput();
-
-          // ── Show compilation errors ───────────────────────
-          if (!result.success) {
-            const errorText =
-              result.error || result.output || 'Compilation failed.';
-
-            // Always show raw error in terminal so nothing is hidden
-            setTerminalLogs((prev) => [
-              ...prev,
-              errorText,
-            ]);
-
-            const friendly = interpretCompilerOutput(errorText);
-            setErrors(friendly);
-
-            if (monacoRef.current && editorRef.current) {
-              applyMonacoMarkers(
-                monacoRef.current,
-                editorRef.current,
-                friendly
-              );
-
-              if (friendly.length > 0) {
-                const first = friendly[0];
-                goToLineColumn(
-                  editorRef.current,
-                  first.line,
-                  first.column
-                );
-                setSelectedErrorId(first.id);
-              }
-            }
-            return;
-          }
-
-          // ── Show compiler warnings on success ─────────────
-          if (result.warnings) {
-            const friendly = interpretCompilerOutput(result.warnings);
-            setErrors(friendly);
-
-            if (monacoRef.current && editorRef.current) {
-              applyMonacoMarkers(
-                monacoRef.current,
-                editorRef.current,
-                friendly
-              );
-
-              if (friendly.length > 0) {
-                const first = friendly[0];
-                goToLineColumn(
-                  editorRef.current,
-                  first.line,
-                  first.column
-                );
-                setSelectedErrorId(first.id);
-              }
-            }
-          } else {
-            clearErrorState();
-          }
-
-          // Show exit status only if no stdout was streamed (empty output)
-          if (!result.output?.trim()) {
-            setTerminalLogs((prev) => [
-              ...prev,
-              '> Process exited with code 0.',
-            ]);
-          }
-        })
-        .catch((err: unknown) => {
-          if (!isCurrentExecution()) return;
-          setExecutionStatus('failed');
-          setIsRunning(false);
-          clearTransientInput();
-          const message = err instanceof Error ? err.message : String(err);
-          setTerminalLogs((prev) => [
-            ...prev,
-            `> Error: ${message}`,
-          ]);
-        });
-      return;
-    }
-
-    // ── Python execution path ─────────────────────────────────
-    if (activeLanguage === 'python') {
-      const stdin = [
-        ...programInputs.map((input) => input.value),
-        ...queuedInput,
-      ].join('\n');
-      clearTransientInput();
-
-      let baseLogLength = 0;
-      let highestAttempt = 1;
-
-      setTerminalLogs((prev) => {
-        baseLogLength = prev.length + 1;
-        return [...prev, `> Running ${activeFile.name}…`];
-      });
-
-      const code = activeFile.content;
-
-      pythonClient
-        .run(
-          code,
-          stdin,
-          // ── Streaming stdout/stderr callback ──────────────
-          { onOutput: (_stream: 'stdout' | 'stderr', text: string, attempt = 1) => {
-            if (!isCurrentExecution()) return;
-            if (!text) return;
-            setTerminalLogs((prev) => {
-              if (attempt > highestAttempt) {
-                highestAttempt = attempt;
-                return [...prev.slice(0, baseLogLength), text];
-              }
-              return [...prev, text];
-            });
-          },
-          // ── Status update callback ────────────────────────
-          onStatus: (status: ExecutionStatus) => {
-            if (!isCurrentExecution()) return;
-            setExecutionStatus(status);
-            if (
-              status === 'completed' ||
-              status === 'failed' ||
-              status === 'stopped' ||
-              status === 'timeout'
-            ) {
-              setIsRunning(false);
-            }
-          }}
-        )
-        .then((result) => {
-          if (!isCurrentExecution()) return;
-          const finalStatus =
-            result.status ??
-            (result.success ? 'completed' : 'failed');
-
-          setExecutionStatus(finalStatus);
-          setIsRunning(false);
-          clearTransientInput();
-
-          // ── Show Python errors ─────────────────────────────
-          if (!result.success) {
-            const errorText =
-              result.error || result.output || 'Execution failed.';
-
-            setTerminalLogs((prev) => [
-              ...prev,
-              errorText,
-            ]);
-
-            const friendly = interpretPythonError(errorText);
-            setErrors(friendly);
-            if (friendly.length > 0 && monacoRef.current && editorRef.current) {
-              applyMonacoMarkers(monacoRef.current, editorRef.current, friendly);
-              goToLineColumn(editorRef.current, friendly[0].line, friendly[0].column);
-              setSelectedErrorId(friendly[0].id);
-            }
-            return;
-          }
-
-          clearErrorState();
-
-          // Show exit status only if no stdout was streamed (empty output)
-          if (!result.output?.trim()) {
-            setTerminalLogs((prev) => [
-              ...prev,
-              '> Process exited with code 0.',
-            ]);
-          }
-        })
-        .catch((err: unknown) => {
-          if (!isCurrentExecution()) return;
-          setExecutionStatus('failed');
-          setIsRunning(false);
-          clearTransientInput();
-          const message = err instanceof Error ? err.message : String(err);
-          setTerminalLogs((prev) => [
-            ...prev,
-            `> Error: ${message}`,
-          ]);
-        });
-      return;
-    }
-
-    // ── Unsupported language ───────────────────────────────────
-    setTerminalLogs((prev) => [
-      ...prev,
-      `> Language '${activeLanguage}' is not yet supported for execution.`,
-    ]);
-    setIsRunning(false);
-    setExecutionStatus('failed');
   }, [
     activeFile,
-    activeLanguage,
-    clearErrorState,
-    isRunning,
+    appendTerminalLog,
+    clearDiagnostics,
     files,
-    programInputs,
-    queuedInput,
+    isRunning,
   ]);
 
-  // Keep the ref current so F5 always invokes the latest handleRun
-  useEffect(() => {
-    handleRunRef.current = handleRun;
-  }, [handleRun]);
-
-  /* ============================================================
-     CLEAR TERMINAL
-  ============================================================ */
-
-  const handleClearTerminal = useCallback(() => {
+  const handleClearTerminal = useCallback((): void => {
     setTerminalLogs([]);
-    setClearGeneration((g) => g + 1); // triggers hard clear in xterm
-    setQueuedInput([]);
-    setProgramInputs([]);
+    setClearGeneration((generation) => generation + 1);
     setHtmlPreviewDoc(null);
+    setErrorOutput('');
     setExecutionStatus('idle');
   }, []);
 
-  /* ============================================================
-     BUGGY SAMPLE
-  ============================================================ */
+  const handleReset = useCallback((): void => {
+    executionGenerationRef.current += 1;
+    executionClientRef.current?.stop();
 
-  const handleBuggySample = useCallback(() => {
+    setFiles(INITIAL_FILES);
+    setActiveFileId(INITIAL_FILES[0].id);
+    setActiveLanguage(INITIAL_FILES[0].language);
+    setTerminalLogs(INITIAL_TERMINAL_LOGS);
+    setClearGeneration((generation) => generation + 1);
+    setHtmlPreviewDoc(null);
+    setErrorOutput('');
+    setExecutionStatus('idle');
+    setIsRunning(false);
+
+    clearDiagnostics();
+  }, [clearDiagnostics]);
+
+  const handleBuggySample = useCallback((): void => {
     if (!activeFile) {
       return;
     }
 
     const buggyContent =
-      activeLanguage === 'html'
-        ? BUGGY_HTML_CODE
-        : BUGGY_C_CODE;
+      activeFile.language === 'html'
+        ? `<div>
+  <h1>Broken ForgeByteX sample</h1>
+  <p>This HTML is intentionally incomplete.
+</div>`
+        : activeFile.language === 'python'
+          ? `print("This sample has a syntax error"
+`
+          : `#include <stdio.h>
 
-    setFiles((previousFiles) =>
-      previousFiles.map((file) =>
+int main(void) {
+    printf("Missing semicolon")
+    return 0;
+}
+`;
+
+    setFiles((currentFiles) =>
+      currentFiles.map((file) =>
         file.id === activeFile.id
-          ? {
-              ...file,
-              content: buggyContent,
-            }
-          : file
-      )
+          ? { ...file, content: buggyContent }
+          : file,
+      ),
     );
 
-    clearErrorState();
+    clearDiagnostics();
+    setErrorOutput('');
     setHtmlPreviewDoc(null);
 
-    setTerminalLogs((previousLogs) => [
-      ...previousLogs,
-      `Buggy ${activeLanguage.toUpperCase()} sample loaded.`,
-    ]);
-  }, [activeFile, activeLanguage, clearErrorState]);
-
-  /* ============================================================
-     RESET CURRENT FILE
-  ============================================================ */
-
-  const handleReset = useCallback(() => {
-    if (!activeFile) {
-      return;
-    }
-
-    const originalFile = INITIAL_FILES.find(
-      (file) => file.id === activeFile.id
+    appendTerminalLog(
+      `Loaded an intentional ${activeFile.language.toUpperCase()} sample error.`,
     );
+  }, [activeFile, appendTerminalLog, clearDiagnostics]);
 
-    if (originalFile) {
-      setFiles((previousFiles) =>
-        previousFiles.map((file) =>
-          file.id === activeFile.id
-            ? {
-                ...file,
-                content: originalFile.content,
-                language: originalFile.language,
-                name: originalFile.name,
-              }
-            : file
-        )
-      );
+  const handleLoadProgram = useCallback(
+    (program: NebProgram): void => {
+      const extension =
+        program.language === 'html'
+          ? 'html'
+          : getExtensionForLanguage(program.language);
 
-      setActiveLanguage(originalFile.language);
-    } else {
-      setFiles((previousFiles) =>
-        previousFiles.map((file) =>
-          file.id === activeFile.id
-            ? {
-                ...file,
-                content: '',
-              }
-            : file
-        )
-      );
-    }
+      const loadedFile: ForgeProjectFile = {
+        id: createFileId(),
+        name: `${program.id}.${extension}`,
+        language: program.language,
+        content: program.content,
+        isWebProjectFile: isWebProjectFile({
+          language: program.language,
+        }),
+      };
 
-    setErrors([]);
-    setSelectedErrorId(null);
-    setShowRawError(false);
-    setHtmlPreviewDoc(null);
+      setFiles((currentFiles) => [
+        ...currentFiles,
+        loadedFile,
+      ]);
+      setActiveFileId(loadedFile.id);
+      setActiveLanguage(loadedFile.language);
+      setIsCurriculumOpen(false);
+      setHtmlPreviewDoc(null);
+      setErrorOutput('');
+      clearDiagnostics();
+    },
+    [clearDiagnostics],
+  );
 
-    setTerminalLogs((previousLogs) => [
-      ...previousLogs,
-      `Reset ${activeFile.name}.`,
-    ]);
-  }, [activeFile]);
-
-  /* ============================================================
-     CREATE NEW FILE
-  ============================================================ */
-
-  const handleNewFile = useCallback(() => {
-    const extension =
-      getFileExtension(activeLanguage);
-
-    const languageLabel =
-      activeLanguage === 'plaintext'
-        ? 'text'
-        : activeLanguage;
-
-    const existingNames = new Set(
-      files.map((file) => file.name)
-    );
-
-    let index = 1;
-
-    let filename =
-      `untitled-${index}.${extension}`;
-
-    while (existingNames.has(filename)) {
-      index += 1;
-      filename =
-        `untitled-${index}.${extension}`;
-    }
-
-    const newFile: FileItem = {
-      id: createFileId(),
-      name: filename,
-      language: activeLanguage,
-      content: '',
-    };
-
-    setFiles((previousFiles) => [
-      ...previousFiles,
-      newFile,
-    ]);
-
-    setActiveFileId(newFile.id);
-    clearErrorState();
-    setHtmlPreviewDoc(null);
-
-    setTerminalLogs((previousLogs) => [
-      ...previousLogs,
-      `Created new ${languageLabel} file: ${filename}`,
-    ]);
-  }, [activeLanguage, clearErrorState, files]);
-
-  const handleLoadNebProgram = (program: { id: string; title: string; language: SupportedLanguage; content: string }) => {
-    const extension = program.language === 'c' ? 'c' : 'html';
-
-    const filename = `${program.id}.${extension}`;
-
-    const newFile: FileItem = {
-      id: createFileId(),
-      name: filename,
-      language: program.language,
-      content: program.content,
-    };
-
-    setFiles((previousFiles) => [
-      ...previousFiles,
-      newFile,
-    ]);
-
-    setActiveFileId(newFile.id);
-    setActiveLanguage(newFile.language);
-
-    clearErrorState();
-    setHtmlPreviewDoc(null);
-
-    setTerminalLogs((previousLogs) => [
-      ...previousLogs,
-      `Loaded NEB program: ${program.title}`,
-    ]);
-
-    setIsNebModalOpen(false);
-  };
-
-  /* ============================================================
-     EXPORT CURRENT FILE
-  ============================================================ */
-
-  const handleExport = useCallback(() => {
-    if (!activeFile) {
-      return;
-    }
-
-    const blob = new Blob(
-      [activeFile.content],
-      {
-        type:
-          activeFile.language === 'html'
-            ? 'text/html'
-            : 'text/plain',
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'F5') {
+        event.preventDefault();
+        void handleRun();
       }
-    );
+    };
 
-    const url = URL.createObjectURL(blob);
+    window.addEventListener('keydown', handleKeyDown);
 
-    const anchor = document.createElement('a');
+    return () => {
+      window.removeEventListener(
+        'keydown',
+        handleKeyDown,
+      );
+    };
+  }, [handleRun]);
 
-    anchor.href = url;
-    anchor.download = activeFile.name;
+  const editorFiles: ProjectFile[] = files.map((file) => ({
+    id: file.id,
+    name: file.name,
+    language: file.language,
+    content: file.content,
+  }));
 
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+  const renderEditor = (): ReactElement => (
+    <div className="flex h-full w-full flex-col overflow-hidden bg-editor-bg">
+      <div className="relative min-h-0 flex-1">
+        <CodeEditor
+          activeFileId={activeFile?.id}
+          code={activeFile?.content ?? ''}
+          files={editorFiles}
+          language={
+            activeFile?.language ?? 'plaintext'
+          }
+          onChange={handleUpdateCode}
+          onMount={(editor, monacoInstance) => {
+            editorRef.current = editor;
+            monacoRef.current = monacoInstance;
+          }}
+          onSelectFile={handleSelectFile}
+          theme={activeTheme}
+        />
+      </div>
+    </div>
+  );
 
-    URL.revokeObjectURL(url);
-
-    setTerminalLogs((previousLogs) => [
-      ...previousLogs,
-      `Exported ${activeFile.name}.`,
-    ]);
-  }, [activeFile]);
-
-  /* ============================================================
-     RENDER
-  ============================================================ */
+  const renderConsole = (): ReactElement => (
+    <ConsolePreviewPanel
+      activeLanguage={
+        activeFile?.language ?? activeLanguage
+      }
+      activeTheme={activeTheme}
+      clearGeneration={clearGeneration}
+      errorFileName={activeFile?.name}
+      errorOutput={errorOutput}
+      executionStatus={executionStatus}
+      files={files}
+      htmlPreviewDoc={htmlPreviewDoc}
+      isWaitingForInput={
+        executionStatus === 'waiting-input'
+      }
+      onClearError={() => setErrorOutput('')}
+      onClearTerminal={handleClearTerminal}
+      onJumpToError={(line, column) => {
+        goToLineColumn(editorRef.current, line, column);
+      }}
+      onSendInput={handleSendInput}
+      onTerminalPositionChange={setTerminalPosition}
+      terminalLogs={terminalLogs}
+      terminalPosition={terminalPosition}
+    />
+  );
 
   return (
-    <div className="app-shell flex flex-col h-screen w-screen bg-[#080b12] text-slate-100 overflow-hidden font-sans">
-
-      {/* ========================================================
-          HEADER
-      ========================================================= */}
-
+    <div className="app-shell flex h-screen w-screen flex-col overflow-hidden font-sans">
       <HeaderControls
-        activeLanguage={activeLanguage}
-        activeTheme={activeTheme}
-        isRunning={isRunning}
-        onRun={handleRun}
-        onClear={handleClearTerminal}
-        onBuggySample={handleBuggySample}
-        onReset={handleReset}
-        onNewFile={handleNewFile}
-        onExport={handleExport}
-        onLanguageSelect={handleLanguageSelect}
-        onThemeSelect={setActiveTheme}
-        isFocusMode={isFocusMode}
-        onToggleFocusMode={() =>
-          setIsFocusMode((previous) => !previous)
+        activeLanguage={
+          activeFile?.language ?? activeLanguage
         }
-        onFeedbackClick={() => setIsFeedbackModalOpen(true)}
+        activeTheme={activeTheme}
+        isFocusMode={isFocusMode}
+        isRunning={isRunning}
+        onBuggySample={handleBuggySample}
+        onClear={handleClearTerminal}
+        onExport={() => setIsExportOpen(true)}
+        onFeedbackClick={() => setIsFeedbackOpen(true)}
+        onLanguageSelect={handleLanguageSelect}
+        onNewFile={handleAddFile}
+        onReset={handleReset}
+        onRun={() => void handleRun()}
+        onThemeSelect={setActiveTheme}
+        onToggleFocusMode={() =>
+          setIsFocusMode((current) => !current)
+        }
       />
 
-      {/* ========================================================
-          MAIN WORKSPACE
-      ======================================================== */}
+      <main className="app-main relative min-h-0 flex-1 overflow-hidden">
+        {isFocusMode ? (
+          <PanelGroup
+            className="h-full w-full"
+            orientation="vertical"
+          >
+            <Panel defaultSize="60" minSize="30">
+              {renderEditor()}
+            </Panel>
 
-      <main className="flex-1 flex overflow-hidden w-full h-full relative">
+            <PanelResizeHandle className="workspace-resizer h-1 cursor-row-resize" />
 
-        {/* ======================================================
-            FILE EXPLORER
-        ======================================================= */}
-
-        <FileExplorer
-          files={files}
-          activeFileId={activeFileId}
-          onSelectFile={handleFileSelect}
-          isCollapsed={isExplorerCollapsed}
-          onToggleCollapse={() =>
-            setIsExplorerCollapsed(
-              (previous) => !previous
-            )
-          }
-        />
-
-        {/* ======================================================
-            MAIN IDE AREA (EDITOR + TERMINAL)
-        ======================================================= */}
-
-        {terminalPosition === 'bottom' ? (
-          // BOTTOM LAYOUT: Vertical split
-          <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden bg-app-bg">
-            {/* TOP: CODE EDITOR */}
-            <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
-              {activeFile ? (
-                <React.Suspense fallback={<EditorSkeleton />}>
-                  <CodeEditor
-                    code={activeFile.content}
-                    language={activeFile.language}
-                    theme={activeTheme}
-                    files={files}
-                    activeFileId={activeFileId}
-                    onSelectFile={handleFileSelect}
-                    onChange={handleCodeChange}
-                    onMount={handleEditorMount}
-                  />
-                </React.Suspense>
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-muted text-sm">
-                  No file selected.
-                </div>
-              )}
-
-              {/* FRIENDLY ERROR PANEL */}
-              {errors.length > 0 && (
-                <FriendlyErrorPanel
-                  errors={errors}
-                  selectedErrorId={selectedErrorId}
-                  showRawError={showRawError}
-                  onErrorSelect={(error) =>
-                    setSelectedErrorId(error.id)
-                  }
-                  onToggleRawError={() =>
-                    setShowRawError(
-                      (previous) => !previous
-                    )
-                  }
-                />
-              )}
-            </div>
-
-            {/* HORIZONTAL SPLIT RESIZER HANDLE */}
-            <div
-              onMouseDown={handleMouseDown}
-              className="h-1 bg-surface-soft hover:bg-indigo-500 cursor-row-resize flex items-center justify-center transition-colors group z-20 shrink-0 border-t border-theme"
-              role="separator"
-              aria-orientation="horizontal"
-              aria-label="Resize terminal panel"
-            >
-              <div className="h-0.5 w-8 bg-border-strong group-hover:bg-white rounded-full transition-colors" />
-            </div>
-
-            {/* BOTTOM: TERMINAL / PREVIEW PANEL */}
-            <div
-              style={{
-                height: `${terminalSize}px`,
-              }}
-              className="shrink-0 flex flex-col min-w-0 w-full overflow-hidden bg-surface"
-            >
-              <ConsolePreviewPanel
-                activeLanguage={activeLanguage}
-                activeTheme={activeTheme}
-                terminalLogs={terminalLogs}
-                htmlPreviewDoc={htmlPreviewDoc}
-                onSendInput={(input) => {
-                  // Normalize the line for the runtime while preserving the
-                  // typed value in the UI state.
-                  const stdinLine = input.endsWith('\n') ? input : `${input}\n`;
-                  let sent = false;
-                  if (activeLanguage === 'c') {
-                    sent = compilerClient.sendInput(stdinLine);
-                  } else if (activeLanguage === 'python') {
-                    sent = pythonClient.sendInput(stdinLine);
-                  }
-                  if (!sent) {
-                    setQueuedInput((previous) => [...previous, input]);
-                  }
-                }}
-                onClearTerminal={handleClearTerminal}
-                isWaitingForInput={executionStatus === 'waiting-input'}
-                executionStatus={executionStatus}
-                clearGeneration={clearGeneration}
-                terminalPosition={terminalPosition}
-                onTerminalPositionChange={setTerminalPosition}
-              />
-            </div>
-          </div>
+            <Panel defaultSize="40" minSize="20">
+              {renderConsole()}
+            </Panel>
+          </PanelGroup>
         ) : (
-          // RIGHT LAYOUT: Horizontal split
-          <div className="flex-1 flex min-w-0 h-full relative overflow-hidden bg-app-bg">
-            {/* LEFT: CODE EDITOR */}
-            <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
-              {activeFile ? (
-                <React.Suspense fallback={<EditorSkeleton />}>
-                  <CodeEditor
-                    code={activeFile.content}
-                    language={activeFile.language}
-                    theme={activeTheme}
-                    files={files}
-                    activeFileId={activeFileId}
-                    onSelectFile={handleFileSelect}
-                    onChange={handleCodeChange}
-                    onMount={handleEditorMount}
-                  />
-                </React.Suspense>
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-muted text-sm">
-                  No file selected.
-                </div>
-              )}
+          <PanelGroup
+            className="h-full w-full"
+            orientation="horizontal"
+          >
+            <Panel
+              defaultSize="20"
+              maxSize="35"
+              minSize="15"
+            >
+              <FileExplorer
+                activeFileId={activeFile?.id ?? ''}
+                files={editorFiles}
+                onAddFile={handleAddFile}
+                onDeleteFile={handleDeleteFile}
+                onRenameFile={handleRenameFile}
+                onSelectFile={handleSelectFile}
+              />
+            </Panel>
 
-              {/* FRIENDLY ERROR PANEL */}
-              {errors.length > 0 && (
-                <FriendlyErrorPanel
-                  errors={errors}
-                  selectedErrorId={selectedErrorId}
-                  showRawError={showRawError}
-                  onErrorSelect={(error) =>
-                    setSelectedErrorId(error.id)
-                  }
-                  onToggleRawError={() =>
-                    setShowRawError(
-                      (previous) => !previous
-                    )
+            <PanelResizeHandle className="workspace-resizer w-1 cursor-col-resize" />
+
+            <Panel defaultSize="80">
+              <PanelGroup
+                className="h-full w-full"
+                orientation={
+                  terminalPosition === 'right'
+                    ? 'horizontal'
+                    : 'vertical'
+                }
+              >
+                <Panel defaultSize="60" minSize="30">
+                  {renderEditor()}
+                </Panel>
+
+                <PanelResizeHandle
+                  className={
+                    terminalPosition === 'right'
+                      ? 'workspace-resizer w-1 cursor-col-resize'
+                      : 'workspace-resizer h-1 cursor-row-resize'
                   }
                 />
-              )}
-            </div>
 
-            {/* VERTICAL SPLIT RESIZER HANDLE */}
-            <div
-              onMouseDown={handleMouseDown}
-              className="w-1 bg-surface-soft hover:bg-indigo-500 cursor-col-resize flex items-center justify-center transition-colors group z-20 shrink-0 border-l border-theme"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize terminal panel"
-            >
-              <div className="w-0.5 h-8 bg-border-strong group-hover:bg-white rounded-full transition-colors" />
-            </div>
-
-            {/* RIGHT: TERMINAL / PREVIEW PANEL */}
-            <div
-              style={{
-                width: `${terminalSize}px`,
-              }}
-              className="shrink-0 flex flex-col min-h-0 overflow-hidden bg-surface"
-            >
-              <ConsolePreviewPanel
-                activeLanguage={activeLanguage}
-                activeTheme={activeTheme}
-                terminalLogs={terminalLogs}
-                htmlPreviewDoc={htmlPreviewDoc}
-                onSendInput={(input) => {
-                  // Normalize the line for the runtime while preserving the
-                  // typed value in the UI state.
-                  const stdinLine = input.endsWith('\n') ? input : `${input}\n`;
-                  let sent = false;
-                  if (activeLanguage === 'c') {
-                    sent = compilerClient.sendInput(stdinLine);
-                  } else if (activeLanguage === 'python') {
-                    sent = pythonClient.sendInput(stdinLine);
-                  }
-                  if (!sent) {
-                    setQueuedInput((previous) => [...previous, input]);
-                  }
-                }}
-                onClearTerminal={handleClearTerminal}
-                isWaitingForInput={executionStatus === 'waiting-input'}
-                executionStatus={executionStatus}
-                clearGeneration={clearGeneration}
-                terminalPosition={terminalPosition}
-                onTerminalPositionChange={setTerminalPosition}
-              />
-            </div>
-          </div>
+                <Panel defaultSize="40" minSize="20">
+                  {renderConsole()}
+                </Panel>
+              </PanelGroup>
+            </Panel>
+          </PanelGroup>
         )}
       </main>
 
+      <WelcomeModal
+        isOpen={isWelcomeOpen}
+        onClose={() => setIsWelcomeOpen(false)}
+      />
+
       <NebCurriculumModal
-        isOpen={isNebModalOpen}
-        onClose={() => setIsNebModalOpen(false)}
+        isOpen={isCurriculumOpen}
+        onClose={() => setIsCurriculumOpen(false)}
+        onLoadProgram={handleLoadProgram}
         programs={nebPrograms}
-        onLoadProgram={handleLoadNebProgram}
       />
 
       <FeedbackModal
-        isOpen={isFeedbackModalOpen}
-        onClose={() => setIsFeedbackModalOpen(false)}
+        currentLanguage={
+          activeFile?.language ?? activeLanguage
+        }
         currentTheme={activeTheme}
-        currentLanguage={activeLanguage}
+        isOpen={isFeedbackOpen}
+        onClose={() => setIsFeedbackOpen(false)}
       />
 
-      <WelcomeModal
-        isOpen={isWelcomeModalOpen}
-        onClose={() => setIsWelcomeModalOpen(false)}
+      <ExportModal
+        activeFile={activeFile}
+        files={files}
+        isOpen={isExportOpen}
+        onClose={() => setIsExportOpen(false)}
       />
     </div>
   );

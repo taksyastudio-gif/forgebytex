@@ -4,17 +4,17 @@
   "version": "0.0.0",
   "type": "module",
   "author": "TAKSYA STUDIO",
-  "description": "ForgeByteX - Professional Code Editor by TAKSYA STUDIO",
+  "description": "ForgeByteX - browser-native WebAssembly IDE",
   "scripts": {
     "predev": "node scripts/copy-monaco.mjs && node scripts/copy-pyodide.mjs",
     "dev": "vite",
+    "server": "node backend/server.js",
     "prebuild": "node scripts/copy-monaco.mjs && node scripts/copy-pyodide.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "npm run test:core",
-    "preview": "vite preview",
-    "server": "node backend/server.js",
-    "test:core": "npm --prefix execution-core test"
+    "test:core": "npm --prefix execution-core test",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",
@@ -30,6 +30,7 @@
     "pyodide": "^0.25.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-resizable-panels": "^4.12.3",
     "xterm": "^5.3.0",
     "zustand": "^5.0.15"
   },

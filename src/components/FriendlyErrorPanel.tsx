@@ -1,73 +1,231 @@
-import React from 'react';
-import type { FriendlyError } from '../utils/error-interpreter';
+import {
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Lightbulb,
+  MapPin,
+  X,
+} from 'lucide-react';
+import { useMemo, useState, type FC } from 'react';
+
+import {
+  ErrorInterpreter,
+  type HumorousErrorInsight,
+} from '../compiler/error-interpreter';
 
 interface FriendlyErrorPanelProps {
-  errors: FriendlyError[];
-  selectedErrorId: string | null;
-  showRawError: boolean;
-  onErrorSelect: (error: FriendlyError) => void;
-  onToggleRawError: () => void;
+  rawError: string;
+  language: string;
+  fileName?: string;
+  onJumpToError?: (
+    line: number,
+    column: number,
+  ) => void;
+  onClear?: () => void;
 }
 
-export const FriendlyErrorPanel: React.FC<FriendlyErrorPanelProps> = ({
-  errors,
-  selectedErrorId,
-  showRawError,
-  onErrorSelect,
-  onToggleRawError,
+export const FriendlyErrorPanel: FC<
+  FriendlyErrorPanelProps
+> = ({
+  rawError,
+  language,
+  fileName,
+  onJumpToError,
+  onClear,
 }) => {
-  const isWarningOnly = errors.length > 0 && errors.every((error) => error.severity === 'warning');
-  const headingText = isWarningOnly ? 'Warning' : 'Compilation Error';
-  const panelColor = isWarningOnly ? 'bg-amber-950/30 border-amber-500/40' : 'bg-[#12080d] border-red-900/50';
-  const cardColor = isWarningOnly ? 'bg-amber-950/40 border-amber-700/55 hover:bg-amber-900/50' : 'bg-red-950/30 border-red-900/40 hover:bg-red-950/50';
+  const [showRawLog, setShowRawLog] = useState(false);
+  const [showExplanation, setShowExplanation] =
+    useState(true);
+
+  const insight = useMemo<HumorousErrorInsight>(
+    () => ErrorInterpreter.parse(rawError, language),
+    [language, rawError],
+  );
+
+  const line = insight.lineNumber ?? null;
+  const column = insight.columnNumber ?? 1;
+  const hasLocation = line !== null && line > 0;
+
+  const handleJumpToError = (): void => {
+    if (line === null || !onJumpToError) {
+      return;
+    }
+
+    onJumpToError(line, column);
+  };
 
   return (
-    <div className={`border-t p-3 text-xs font-sans ${panelColor}`}>
-      <div className="flex items-center justify-between mb-2">
-        <span className={`font-bold flex items-center gap-1.5 ${isWarningOnly ? 'text-amber-400' : 'text-red-400'}`}>
-          ?? {errors.length} {headingText}{errors.length > 1 ? 's' : ''} Detected
-        </span>
+    <section
+      aria-label="ForgeByteX Error Doctor"
+      aria-live="polite"
+      className="my-2 flex max-h-full flex-col gap-3 overflow-y-auto rounded-xl border border-rose-500/30 bg-slate-900 p-4 font-sans shadow-2xl"
+    >
+      <header className="flex items-start justify-between gap-4 border-b border-rose-500/20 pb-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span
+            aria-hidden="true"
+            className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-2 text-2xl"
+          >
+            {insight.emoji}
+          </span>
+
+          <div className="min-w-0">
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-rose-300/70">
+              ForgeByteX Error Doctor
+            </p>
+
+            <h3 className="text-sm font-bold tracking-wide text-rose-400">
+              {insight.humorousTitle}
+            </h3>
+
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+              {fileName ? (
+                <span className="font-mono text-slate-300">
+                  {fileName}
+                </span>
+              ) : null}
+
+              {hasLocation ? (
+                <span className="inline-flex items-center gap-1">
+                  <MapPin
+                    aria-hidden="true"
+                    size={12}
+                  />
+                  Line {line}
+                  {column > 1 ? `, Column ${column}` : ''}
+                </span>
+              ) : null}
+
+              {insight.category &&
+              insight.category !== 'unknown' ? (
+                <span className="uppercase tracking-wider text-slate-500">
+                  {insight.category}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {onClear ? (
+          <button
+            aria-label="Dismiss error"
+            className="icon-action shrink-0 rounded p-1"
+            onClick={onClear}
+            title="Dismiss error"
+            type="button"
+          >
+            <X aria-hidden="true" size={15} />
+          </button>
+        ) : null}
+      </header>
+
+      <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
         <button
-          onClick={onToggleRawError}
-          className="text-[10px] text-slate-400 hover:text-slate-200 underline"
+          aria-controls="error-doctor-explanation"
+          aria-expanded={showExplanation}
+          className="flex w-full items-center justify-between text-left"
+          onClick={() =>
+            setShowExplanation((visible) => !visible)
+          }
+          type="button"
         >
-          {showRawError ? 'Hide Raw Details' : 'View Raw Log'}
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+            <Lightbulb
+              aria-hidden="true"
+              className="text-amber-300"
+              size={14}
+            />
+            What happened?
+          </span>
+
+          {showExplanation ? (
+            <ChevronDown
+              aria-hidden="true"
+              className="text-slate-500"
+              size={14}
+            />
+          ) : (
+            <ChevronRight
+              aria-hidden="true"
+              className="text-slate-500"
+              size={14}
+            />
+          )}
+        </button>
+
+        {showExplanation ? (
+          <div
+            className="mt-2 space-y-2"
+            id="error-doctor-explanation"
+          >
+            <p className="text-xs leading-relaxed text-slate-300">
+              {insight.friendlyExplanation}
+            </p>
+
+            {insight.confidence !== undefined &&
+            insight.confidence < 0.7 ? (
+              <p className="text-[11px] leading-relaxed text-amber-300">
+                We are not fully certain about this diagnosis.
+                Check the reported line and the lines immediately
+                above it.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-3">
+        <h4 className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+          <span aria-hidden="true">💡</span>
+          Easy fix
+        </h4>
+
+        <p className="rounded border border-emerald-500/20 bg-emerald-950/40 p-2 font-mono text-xs leading-relaxed text-emerald-200/90">
+          {insight.suggestedFix}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {hasLocation && onJumpToError ? (
+          <button
+            className="primary-action inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold"
+            onClick={handleJumpToError}
+            type="button"
+          >
+            <ExternalLink
+              aria-hidden="true"
+              size={13}
+            />
+            Jump to error
+          </button>
+        ) : null}
+
+        <button
+          aria-controls="error-doctor-raw-log"
+          aria-expanded={showRawLog}
+          className="secondary-action inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 font-mono text-[11px]"
+          onClick={() => setShowRawLog((visible) => !visible)}
+          type="button"
+        >
+          {showRawLog ? (
+            <ChevronDown aria-hidden="true" size={13} />
+          ) : (
+            <ChevronRight aria-hidden="true" size={13} />
+          )}
+          {showRawLog ? 'Hide raw log' : 'Show raw log'}
         </button>
       </div>
 
-      <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
-        {errors.map((err) => {
-          const isWarning = err.severity === 'warning';
-          const tagText = isWarning ? 'Warning' : 'Error';
-          const tagClass = isWarning ? 'text-amber-200 bg-amber-900/50 border-amber-500/30' : 'text-red-200 bg-red-950/50 border-red-500/30';
-
-          return (
-            <div
-              key={err.id}
-              onClick={() => onErrorSelect(err)}
-              className={`p-2 rounded-lg cursor-pointer border transition-all ${selectedErrorId === err.id ? (isWarning ? 'bg-amber-950/80 border-amber-400' : 'bg-red-950/80 border-red-500') : cardColor}`}
-            >
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className={`text-[10px] uppercase tracking-wide font-bold border px-1.5 py-0.5 rounded ${tagClass}`}>
-                  {tagText}
-                </span>
-                <span className="font-mono text-[11px] text-slate-300">
-                  Line {err.line}, Column {err.column}
-                </span>
-              </div>
-              <div className="font-mono text-[11px] font-bold text-red-300">
-                {err.message}
-              </div>
-              <p className="text-slate-300 text-[11px] mt-1">{err.explanation}</p>
-              {showRawError && (
-                <pre className="mt-1 p-1 bg-black/40 rounded text-[10px] text-red-400 font-mono overflow-x-auto">
-                  {err.raw}
-                </pre>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+      {showRawLog ? (
+        <pre
+          className="max-h-64 overflow-x-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] leading-normal text-rose-300/80 select-text"
+          id="error-doctor-raw-log"
+        >
+          {insight.rawError}
+        </pre>
+      ) : null}
+    </section>
   );
 };
+
+export default FriendlyErrorPanel;

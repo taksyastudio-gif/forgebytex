@@ -1,7 +1,30 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Bug, Lightbulb, Heart, Send, X, Loader2, CheckCircle2 } from 'lucide-react';
-import type { EditorTheme, SupportedLanguage } from '../types/byteplay';
-import { submitUserFeedback, type FeedbackSubmission } from '../lib/supabase';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FC,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
+import {
+  Bug,
+  CheckCircle2,
+  Heart,
+  Lightbulb,
+  Loader2,
+  Send,
+  X,
+} from 'lucide-react';
+
+import type {
+  EditorTheme,
+  SupportedLanguage,
+} from '../types/byteplay';
+import {
+  submitUserFeedback,
+  type FeedbackSubmission,
+} from '../lib/supabase';
 
 type FeedbackType = 'bug' | 'suggestion' | 'feedback';
 
@@ -12,51 +35,115 @@ interface FeedbackModalProps {
   currentLanguage: SupportedLanguage;
 }
 
-const FEEDBACK_TYPES: Array<{ value: FeedbackType; label: string; icon: React.ReactNode }> = [
-  { value: 'bug', label: 'Bug', icon: <Bug size={16} /> },
-  { value: 'suggestion', label: 'Suggestion', icon: <Lightbulb size={16} /> },
-  { value: 'feedback', label: 'Feedback', icon: <Heart size={16} /> },
+interface FeedbackTypeOption {
+  value: FeedbackType;
+  label: string;
+  icon: ReactNode;
+}
+
+const FEEDBACK_TYPES: FeedbackTypeOption[] = [
+  {
+    value: 'bug',
+    label: 'Bug',
+    icon: <Bug aria-hidden="true" size={16} />,
+  },
+  {
+    value: 'suggestion',
+    label: 'Suggestion',
+    icon: <Lightbulb aria-hidden="true" size={16} />,
+  },
+  {
+    value: 'feedback',
+    label: 'Feedback',
+    icon: <Heart aria-hidden="true" size={16} />,
+  },
 ];
 
 const APP_VERSION = '0.0.0';
 const MAX_MESSAGE_LENGTH = 5000;
+const SUCCESS_CLOSE_DELAY_MS = 2000;
 
-export const FeedbackModal: React.FC<FeedbackModalProps> = ({
+export const FeedbackModal: FC<FeedbackModalProps> = ({
   isOpen,
   onClose,
   currentTheme,
   currentLanguage,
 }) => {
-  const [selectedType, setSelectedType] = useState<FeedbackType>('bug');
+  const [selectedType, setSelectedType] =
+    useState<FeedbackType>('bug');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => {
-    if (closeTimerRef.current) {
-      clearTimeout(closeTimerRef.current);
+  const closeTimerRef = useRef<number | null>(null);
+  const messageInputRef =
+    useRef<HTMLTextAreaElement | null>(null);
+
+  const handleClose = useCallback((): void => {
+    if (isSubmitting) {
+      return;
     }
+
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+
+    setIsSuccess(false);
+    setError(null);
+    setMessage('');
+    onClose();
+  }, [isSubmitting, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    messageInputRef.current?.focus();
+
+    const handleEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !isSubmitting) {
+        handleClose();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [handleClose, isOpen, isSubmitting]);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
   }, []);
 
-  if (!isOpen) return null;
+  if (!isOpen) {
+    return null;
+  }
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (): Promise<void> => {
     const trimmedMessage = message.trim();
 
     if (!trimmedMessage) {
       setError('Please enter a message.');
+      messageInputRef.current?.focus();
       return;
     }
 
     if (trimmedMessage.length > MAX_MESSAGE_LENGTH) {
-      setError(`Please keep your message under ${MAX_MESSAGE_LENGTH} characters.`);
+      setError(
+        `Please keep your message under ${MAX_MESSAGE_LENGTH} characters.`,
+      );
+      messageInputRef.current?.focus();
       return;
     }
-
-    setIsSubmitting(true);
-    setError(null);
 
     const payload: FeedbackSubmission = {
       type: selectedType,
@@ -66,124 +153,207 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({
       app_version: APP_VERSION,
     };
 
+    setIsSubmitting(true);
+    setError(null);
+
     try {
       await submitUserFeedback(payload);
 
       setIsSuccess(true);
       setMessage('');
 
-      closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = window.setTimeout(() => {
         closeTimerRef.current = null;
         setIsSuccess(false);
         onClose();
-      }, 2000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit feedback.');
+      }, SUCCESS_CLOSE_DELAY_MS);
+    } catch (submissionError: unknown) {
+      setError(
+        submissionError instanceof Error
+          ? submissionError.message
+          : 'Failed to submit feedback. Please try again.',
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleClose = () => {
-    if (!isSubmitting) {
-      if (closeTimerRef.current) {
-        clearTimeout(closeTimerRef.current);
-        closeTimerRef.current = null;
-      }
-      setIsSuccess(false);
-      setError(null);
-      onClose();
+  const handleBackdropMouseDown = (
+    event: MouseEvent<HTMLDivElement>,
+  ): void => {
+    if (event.target === event.currentTarget) {
+      handleClose();
     }
   };
 
   return (
-    <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div
-        className="modal-panel w-[min(400px,95%)] rounded-xl p-4 shadow-2xl border bg-surface"
-        role="dialog"
-        aria-modal="true"
+    <div
+      aria-hidden={false}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onMouseDown={handleBackdropMouseDown}
+    >
+      <section
         aria-labelledby="feedback-title"
+        aria-modal="true"
+        className="modal-panel w-full max-w-md rounded-xl border p-4 shadow-2xl"
+        role="dialog"
       >
-        <div className="flex items-center justify-between mb-4">
-          <h2 id="feedback-title" className="text-sm font-bold text-primary">Feedback</h2>
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <div>
+            <h2
+              className="text-sm font-bold text-primary"
+              id="feedback-title"
+            >
+              Feedback
+            </h2>
+
+            <p className="mt-1 text-[10px] text-secondary">
+              Help improve ForgeByteX with an optional feedback
+              submission.
+            </p>
+          </div>
+
           <button
-            onClick={handleClose}
+            aria-label="Close feedback dialog"
+            className="icon-action rounded p-1"
             disabled={isSubmitting}
-            className="text-secondary hover:text-primary transition-colors disabled:opacity-50"
-            aria-label="Close"
+            onClick={handleClose}
+            type="button"
           >
-            <X size={16} />
+            <X aria-hidden="true" size={16} />
           </button>
         </div>
 
         {isSuccess ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <CheckCircle2 size={32} className="text-emerald-500 mb-2" />
-            <p className="text-sm text-primary font-medium">Thank you for your feedback!</p>
+          <div
+            className="flex flex-col items-center justify-center py-8 text-center"
+            role="status"
+          >
+            <CheckCircle2
+              aria-hidden="true"
+              className="mb-2 text-emerald-500"
+              size={32}
+            />
+
+            <p className="text-sm font-medium text-primary">
+              Thank you for your feedback!
+            </p>
+
+            <p className="mt-1 text-xs text-secondary">
+              Your message helps shape the next ForgeByteX
+              version.
+            </p>
           </div>
         ) : (
           <>
-            <div className="flex gap-2 mb-4">
-              {FEEDBACK_TYPES.map((type) => (
-                <button
-                  key={type.value}
-                  type="button"
-                  onClick={() => setSelectedType(type.value)}
-                  disabled={isSubmitting}
-                  className={[
-                    'flex-1 flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
-                    selectedType === type.value
-                      ? 'bg-indigo-600/10 border-indigo-500/30 text-indigo-400'
-                      : 'border-theme bg-surface-soft text-secondary hover:bg-surface-raised hover:text-primary',
-                    isSubmitting ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
-                  ].join(' ')}
-                >
-                  {type.icon}
-                  <span>{type.label}</span>
-                </button>
-              ))}
+            <div
+              aria-label="Feedback type"
+              className="mb-4 flex gap-2"
+              role="radiogroup"
+            >
+              {FEEDBACK_TYPES.map((feedbackType) => {
+                const isSelected =
+                  selectedType === feedbackType.value;
+
+                return (
+                  <button
+                    aria-checked={isSelected}
+                    className={[
+                      'flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition-colors',
+                      isSelected
+                        ? 'border-indigo-500/30 bg-indigo-600/10 text-indigo-400'
+                        : 'border-theme bg-surface-soft text-secondary hover:bg-surface-raised hover:text-primary',
+                      isSubmitting
+                        ? 'cursor-not-allowed opacity-50'
+                        : '',
+                    ].join(' ')}
+                    disabled={isSubmitting}
+                    key={feedbackType.value}
+                    onClick={() =>
+                      setSelectedType(feedbackType.value)
+                    }
+                    role="radio"
+                    type="button"
+                  >
+                    {feedbackType.icon}
+                    <span>{feedbackType.label}</span>
+                  </button>
+                );
+              })}
             </div>
 
+            <label
+              className="mb-1 block text-[11px] font-semibold text-primary"
+              htmlFor="feedback-message"
+            >
+              Message
+            </label>
+
             <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              maxLength={MAX_MESSAGE_LENGTH}
-              placeholder="Describe your feedback..."
+              aria-describedby={
+                error
+                  ? 'feedback-error feedback-count'
+                  : 'feedback-count'
+              }
+              className="input-field w-full resize-none rounded-lg border px-3 py-2 text-xs outline-none placeholder:text-muted disabled:opacity-50"
               disabled={isSubmitting}
-              rows={4}
-              className="w-full rounded-lg border border-theme bg-surface-soft px-3 py-2 text-xs text-primary placeholder:text-muted outline-none focus:border-indigo-500/50 transition-colors resize-none disabled:opacity-50"
+              id="feedback-message"
+              maxLength={MAX_MESSAGE_LENGTH}
+              onChange={(event) => {
+                setMessage(event.target.value);
+                setError(null);
+              }}
+              placeholder="Describe a bug, idea, or improvement..."
+              ref={messageInputRef}
+              rows={5}
+              value={message}
             />
 
-            {error && (
-              <p className="text-[11px] text-red-400 mt-2">{error}</p>
-            )}
+            <div className="mt-1 flex justify-between text-[10px] text-secondary">
+              <span id="feedback-count">
+                {message.length}/{MAX_MESSAGE_LENGTH}
+              </span>
+
+              <span>
+                Current language: {currentLanguage}
+              </span>
+            </div>
+
+            {error ? (
+              <p
+                className="mt-2 text-[11px] text-red-400"
+                id="feedback-error"
+                role="alert"
+              >
+                {error}
+              </p>
+            ) : null}
 
             <button
-              type="button"
-              onClick={handleSubmit}
+              className="primary-action mt-4 flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isSubmitting || !message.trim()}
-              className={[
-                'mt-4 flex items-center justify-center gap-2 w-full rounded-lg px-4 py-2 text-xs font-semibold text-white transition-all',
-                isSubmitting || !message.trim()
-                  ? 'bg-slate-600 cursor-not-allowed opacity-50'
-                  : 'bg-indigo-600 hover:bg-indigo-500 active:scale-95 cursor-pointer',
-              ].join(' ')}
+              onClick={() => void handleSubmit()}
+              type="button"
             >
               {isSubmitting ? (
                 <>
-                  <Loader2 size={14} className="animate-spin" />
+                  <Loader2
+                    aria-hidden="true"
+                    className="animate-spin"
+                    size={14}
+                  />
                   <span>Sending...</span>
                 </>
               ) : (
                 <>
-                  <Send size={14} />
-                  <span>Send</span>
+                  <Send aria-hidden="true" size={14} />
+                  <span>Send feedback</span>
                 </>
               )}
             </button>
           </>
         )}
-      </div>
+      </section>
     </div>
   );
 };

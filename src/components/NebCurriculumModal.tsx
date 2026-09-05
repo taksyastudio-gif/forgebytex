@@ -1,4 +1,6 @@
-import React from 'react';
+import { useEffect, type FC, type MouseEvent } from 'react';
+import { X } from 'lucide-react';
+
 import type { NebProgram } from '../data/nebGrade12Curriculum';
 
 interface NebCurriculumModalProps {
@@ -8,41 +10,103 @@ interface NebCurriculumModalProps {
   onLoadProgram: (program: NebProgram) => void;
 }
 
-export const NebCurriculumModal: React.FC<NebCurriculumModalProps> = ({
+export const NebCurriculumModal: FC<NebCurriculumModalProps> = ({
   isOpen,
   onClose,
   programs,
   onLoadProgram,
 }) => {
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  if (!isOpen) {
+    return null;
+  }
+
+  const handleBackdropClick = (event: MouseEvent<HTMLDivElement>): void => {
+    if (event.target === event.currentTarget) {
+      onClose();
+    }
+  };
 
   return (
-    <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="modal-panel w-[min(900px,95%)] max-h-[85vh] overflow-auto rounded-2xl p-4 shadow-2xl border">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-bold">NEB Grade 12 Curriculum Library</h2>
-          <button onClick={onClose} className="text-sm text-slate-400 hover:text-white">Close</button>
+    <div
+      aria-labelledby="neb-curriculum-title"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onMouseDown={handleBackdropClick}
+      role="dialog"
+    >
+      <div className="modal-panel flex max-h-[85vh] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border shadow-2xl">
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-theme p-4">
+          <div>
+            <h2
+              className="text-lg font-bold text-primary"
+              id="neb-curriculum-title"
+            >
+              NEB Grade 12 Curriculum Library
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              Load a starter program into the current ForgeByteX workspace.
+            </p>
+          </div>
+
+          <button
+            aria-label="Close curriculum library"
+            className="icon-action rounded-md p-1.5"
+            onClick={onClose}
+            type="button"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {programs.map((p) => (
-            <div key={p.id} className="rounded-lg border border-slate-800 p-3 hover:bg-slate-900/40">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-semibold">{p.title}</div>
-                  <div className="text-[12px] text-slate-400">{p.topic ?? p.language}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => onLoadProgram(p)}
-                    className="rounded-md bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500"
-                  >
-                    Load
-                  </button>
-                </div>
-              </div>
+        <div className="min-h-0 overflow-y-auto p-4">
+          {programs.length === 0 ? (
+            <p className="rounded-lg border border-theme p-4 text-sm text-muted">
+              No curriculum programs are available yet.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {programs.map((program) => (
+                <article
+                  className="rounded-lg border border-theme p-3 transition-colors hover:bg-surface-raised"
+                  key={program.id}
+                >
+                  <div className="flex h-full flex-col justify-between gap-4">
+                    <div>
+                      <h3 className="font-semibold text-primary">
+                        {program.title}
+                      </h3>
+                      <p className="mt-1 text-xs text-muted">
+                        {program.topic ?? program.language.toUpperCase()}
+                      </p>
+                    </div>
+
+                    <button
+                      className="primary-action self-start rounded-md px-3 py-1.5 text-xs font-medium"
+                      onClick={() => onLoadProgram(program)}
+                      type="button"
+                    >
+                      Load program
+                    </button>
+                  </div>
+                </article>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>

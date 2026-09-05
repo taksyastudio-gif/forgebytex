@@ -3,88 +3,108 @@
 @tailwind utilities;
 
 :root {
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
   color: var(--text-primary);
   background: var(--app-bg);
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color-scheme: dark;
 
-  /* Default Black Theme Tokens */
   --app-bg: #090d16;
   --surface: #101726;
   --surface-raised: #162035;
   --surface-soft: #1d2942;
   --editor-bg: #0d1117;
   --terminal-bg: #0a0e17;
+
   --text-primary: #f0f6fc;
   --text-secondary: #c9d1d9;
   --text-muted: #8b949e;
+
   --border: #21262d;
   --border-strong: #30363d;
+
   --accent: #58a6ff;
   --accent-strong: #238636;
+  --accent-soft: rgba(88, 166, 255, 0.14);
+
+  --button-bg: var(--surface-raised);
+  --button-hover: var(--surface-soft);
+
   --danger: #f85149;
+  --success: #3fb950;
+  --warning: #d29922;
+
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
 }
 
-[data-theme='white'] {
+[data-theme="white"] {
   color-scheme: light;
+
   --app-bg: #f8fafc;
   --surface: #ffffff;
   --surface-raised: #f1f5f9;
   --surface-soft: #e2e8f0;
   --editor-bg: #ffffff;
   --terminal-bg: #f8fafc;
+
   --text-primary: #0f172a;
   --text-secondary: #334155;
   --text-muted: #64748b;
+
   --border: #e2e8f0;
   --border-strong: #cbd5e1;
+
   --accent: #2563eb;
   --accent-strong: #16a34a;
+  --accent-soft: rgba(37, 99, 235, 0.12);
+
+  --button-bg: var(--surface-raised);
+  --button-hover: var(--surface-soft);
+
   --danger: #dc2626;
-  --shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  --success: #16a34a;
+  --warning: #ca8a04;
+
+  --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
 
-[data-theme='cyberpunk'] {
+[data-theme="cyberpunk"] {
   color-scheme: dark;
+
   --app-bg: #0a0818;
   --surface: #120f2e;
   --surface-raised: #19163e;
   --surface-soft: #231e54;
   --editor-bg: #0f0e17;
   --terminal-bg: #0a0914;
+
   --text-primary: #f2f0ff;
   --text-secondary: #a5f3fc;
   --text-muted: #887ebd;
+
   --border: #251f47;
   --border-strong: #3a326c;
+
   --accent: #00f0ff;
   --accent-strong: #05df72;
+  --accent-soft: rgba(0, 240, 255, 0.14);
+
+  --button-bg: var(--surface-raised);
+  --button-hover: var(--surface-soft);
+
   --danger: #ff4a7d;
-  --shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --success: #05df72;
+  --warning: #facc15;
+
   --accent-glow: rgba(0, 240, 255, 0.15);
   --accent-glow-strong: rgba(5, 223, 114, 0.2);
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
 }
-
-/* Theme helper utility mappings */
-.bg-app-bg { background-color: var(--app-bg) !important; }
-.bg-surface { background-color: var(--surface) !important; }
-.bg-surface-raised { background-color: var(--surface-raised) !important; }
-.bg-surface-soft { background-color: var(--surface-soft) !important; }
-.bg-editor-bg { background-color: var(--editor-bg) !important; }
-.bg-terminal-bg { background-color: var(--terminal-bg) !important; }
-
-.border-theme { border-color: var(--border) !important; }
-.border-theme-strong { border-color: var(--border-strong) !important; }
-
-.text-primary { color: var(--text-primary) !important; }
-.text-secondary { color: var(--text-secondary) !important; }
-.text-muted { color: var(--text-muted) !important; }
-
 
 * {
   box-sizing: border-box;
@@ -124,17 +144,16 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-[data-theme='cyberpunk'] button:focus-visible,
-[data-theme='cyberpunk'] input:focus-visible,
-[data-theme='cyberpunk'] textarea:focus-visible,
-[data-theme='cyberpunk'] select:focus-visible {
-  outline-color: var(--accent);
+[data-theme="cyberpunk"] button:focus-visible,
+[data-theme="cyberpunk"] input:focus-visible,
+[data-theme="cyberpunk"] textarea:focus-visible,
+[data-theme="cyberpunk"] select:focus-visible {
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
 
 ::selection {
-  background: rgba(236, 72, 153, 0.35);
-  color: #ffffff;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--text-primary);
 }
 
 ::-webkit-scrollbar {
@@ -147,8 +166,8 @@ select:focus-visible {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
   border-radius: 999px;
+  background: var(--border-strong);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -168,52 +187,61 @@ input {
 
 .terminal-output {
   white-space: pre-wrap;
-  word-break: break-word;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .no-select {
   user-select: none;
 }
 
-.glass-panel {
-  background: rgba(15, 23, 42, 0.82);
-  border: 1px solid rgba(51, 65, 85, 0.7);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+.bg-app-bg {
+  background-color: var(--app-bg) !important;
 }
 
-.panel-border {
-  border: 1px solid #1e293b;
+.bg-surface {
+  background-color: var(--surface) !important;
 }
 
-.transition-fast {
-  transition:
-    background-color 150ms ease,
-    border-color 150ms ease,
-    color 150ms ease,
-    opacity 150ms ease,
-    transform 150ms ease;
+.bg-surface-raised {
+  background-color: var(--surface-raised) !important;
+}
+
+.bg-surface-soft {
+  background-color: var(--surface-soft) !important;
+}
+
+.bg-editor-bg {
+  background-color: var(--editor-bg) !important;
+}
+
+.bg-terminal-bg {
+  background-color: var(--terminal-bg) !important;
+}
+
+.border-theme {
+  border-color: var(--border) !important;
+}
+
+.border-theme-strong {
+  border-color: var(--border-strong) !important;
+}
+
+.text-primary {
+  color: var(--text-primary) !important;
+}
+
+.text-secondary {
+  color: var(--text-secondary) !important;
+}
+
+.text-muted {
+  color: var(--text-muted) !important;
 }
 
 .app-shell {
   background: var(--app-bg);
   color: var(--text-primary);
-}
-
-.app-shell .text-slate-100,
-.app-shell .text-slate-200 {
-  color: var(--text-primary);
-}
-
-.app-shell .text-slate-300,
-.app-shell .text-slate-400 {
-  color: var(--text-secondary);
-}
-
-.app-shell .text-slate-500,
-.app-shell .text-slate-600 {
-  color: var(--text-muted);
 }
 
 .app-header,
@@ -234,40 +262,18 @@ input {
     min-height 160ms ease;
 }
 
+.main-header-row {
+  min-height: 64px;
+}
+
 .app-header.is-compact .main-header-row {
   min-height: 44px;
   padding-block: 6px;
 }
 
-.main-header-row {
-  min-height: 64px;
-}
-
-.dev-banner {
-  background: linear-gradient(90deg, var(--surface-soft), var(--surface), var(--surface-soft));
-  border-color: var(--border);
-}
-
-.promo-strip,
-.console-promo {
-  background: linear-gradient(90deg, var(--surface-soft), var(--surface-raised));
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
-  box-shadow: var(--shadow);
-}
-
 .app-main,
 .coding-workspace {
   background: var(--app-bg);
-}
-
-.workspace-topbar,
-.workspace-bottombar {
-  color: var(--text-primary);
-}
-
-.workspace-topbar .text-\[10px\],
-.workspace-bottombar {
-  color: var(--text-muted);
 }
 
 .editor-pane,
@@ -276,13 +282,10 @@ input {
 }
 
 .terminal-pane,
-.console-panel {
-  background: var(--terminal-bg);
-  border-color: var(--border);
-}
-
+.console-panel,
 .terminal-log {
   background: var(--terminal-bg);
+  border-color: var(--border);
 }
 
 .workspace-resizer {
@@ -333,25 +336,20 @@ input {
   filter: brightness(1.08);
 }
 
-[data-theme='cyberpunk'] .primary-action {
+[data-theme="cyberpunk"] .primary-action {
   background: var(--accent);
-  color: #0a0818;
+  color: var(--app-bg);
   box-shadow: 0 0 12px var(--accent-glow);
-}
-
-[data-theme='cyberpunk'] .primary-action:hover {
-  background: var(--accent-strong);
-  box-shadow: 0 0 16px var(--accent-glow-strong);
 }
 
 .secondary-action,
 .icon-action {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--button-bg);
   border: 1px solid var(--border);
+  background: var(--button-bg);
   color: var(--text-secondary);
-  display: inline-flex;
   transition:
     background-color 140ms ease,
     border-color 140ms ease,
@@ -372,40 +370,22 @@ input {
 }
 
 .dropdown-menu,
-.input-menu {
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
+.input-menu,
+.modal-panel {
   border-color: var(--border);
+  background: var(--surface);
   color: var(--text-primary);
 }
 
 .input-menu-item:hover,
-.input-menu-item[aria-selected='true'] {
+.input-menu-item[aria-selected="true"] {
   background: var(--accent-soft);
 }
 
-.input-menu-item span:last-child {
-  color: var(--text-muted);
-}
-
 .input-builder {
-  background: var(--surface);
   border-color: var(--border);
+  background: var(--surface);
   color: var(--text-primary);
-}
-
-.input-builder h3 {
-  color: var(--text-primary);
-}
-
-.input-builder p,
-.input-builder label {
-  color: var(--text-muted);
-}
-
-.input-count,
-.input-list-header {
-  background: var(--surface-soft);
-  color: var(--text-muted);
 }
 
 .input-builder .border,
@@ -438,69 +418,13 @@ input {
   color: var(--text-muted);
 }
 
-.modal-panel {
-  background: var(--surface);
-  border-color: var(--border);
-  color: var(--text-primary);
-}
-
-.modal-panel [class*='border-slate'] {
-  border-color: var(--border);
-}
-
-.modal-panel [class*='hover:bg-slate']:hover {
-  background: var(--surface-raised);
-}
-
-.app-shell .app-header button[class*='bg-slate-900'],
-.app-shell .app-header button[class*='bg-slate-800'] {
-  background: var(--button-bg);
-  border-color: var(--border);
-  color: var(--text-secondary);
-}
-
-.app-shell .app-header button[class*='bg-slate-900']:hover,
-.app-shell .app-header button[class*='bg-slate-800']:hover {
-  background: var(--button-hover);
-  color: var(--text-primary);
-}
-
-.app-shell .app-sidebar button:hover {
-  background: var(--button-hover);
-}
-
-.app-shell .app-sidebar button[class*='bg-indigo'] {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-[data-theme='white'] .app-shell [class*='shadow-black'],
-[data-theme='white'] .app-shell [class*='shadow-indigo'],
-[data-theme='white'] .app-shell [class*='shadow-cyan'] {
-  box-shadow: var(--shadow);
-}
-
-[data-theme='white'] .app-shell .bg-\[\#0b0e17\],
-[data-theme='white'] .app-shell .bg-\[\#0a0d16\],
-[data-theme='white'] .app-shell .bg-\[\#080a10\],
-[data-theme='white'] .app-shell .bg-\[\#080b12\],
-[data-theme='white'] .app-shell .bg-\[\#05070d\],
-[data-theme='white'] .app-shell .bg-\[\#04060a\],
-[data-theme='white'] .app-shell .bg-slate-900,
-[data-theme='white'] .app-shell .bg-slate-800 {
-  background-color: var(--surface) !important;
-}
-
-[data-theme='cyberpunk'] .app-shell .bg-\[\#0b0e17\],
-[data-theme='cyberpunk'] .app-shell .bg-\[\#0a0d16\],
-[data-theme='cyberpunk'] .app-shell .bg-\[\#080a10\],
-[data-theme='cyberpunk'] .app-shell .bg-\[\#080b12\],
-[data-theme='cyberpunk'] .app-shell .bg-\[\#05070d\],
-[data-theme='cyberpunk'] .app-shell .bg-\[\#04060a\],
-[data-theme='cyberpunk'] .app-shell .bg-slate-900,
-[data-theme='cyberpunk'] .app-shell .bg-slate-800 {
-  background-color: var(--surface) !important;
+.transition-fast {
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease,
+    transform 150ms ease;
 }
 
 @media (max-width: 900px) {
@@ -517,10 +441,10 @@ input {
   }
 
   .terminal-pane {
-    border-left: 0;
-    border-top: 1px solid var(--border);
-    height: 44%;
     width: 100% !important;
+    height: 44%;
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 
   .editor-pane {
