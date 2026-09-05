@@ -13,13 +13,13 @@ export type NebProgram = {
 export const nebPrograms: NebProgram[] = [
   {
     id: 'c-io-hello',
-    title: 'C: Hello forgebyteX (Basic I/O)',
+    title: 'C: Hello VLNTOX (Basic I/O)',
     language: 'c',
     topic: 'Basic I/O',
     content: `#include <stdio.h>
 
 int main() {
-    printf("Hello forgebyteX!\\n");
+    printf("Hello VLNTOX!\\n");
     return 0;
 }`,
   },
@@ -47,10 +47,10 @@ int main() {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>forgebyteX HTML Sample</title>
+    <title>VLNTOX HTML Sample</title>
   </head>
   <body>
-    <h1>Welcome to forgebyteX</h1>
+    <h1>Welcome to VLNTOX</h1>
     <p>This is an NEB Grade 12 HTML example.</p>
   </body>
 </html>`,

@@ -208,7 +208,7 @@ export const FeedbackModal: FC<FeedbackModalProps> = ({
             </h2>
 
             <p className="mt-1 text-[10px] text-secondary">
-              Help improve ForgeByteX with an optional feedback
+               Help improve VLNTOX with an optional feedback
               submission.
             </p>
           </div>
@@ -240,8 +240,7 @@ export const FeedbackModal: FC<FeedbackModalProps> = ({
             </p>
 
             <p className="mt-1 text-xs text-secondary">
-              Your message helps shape the next ForgeByteX
-              version.
+               Your message helps shape the next VLNTOX version.
             </p>
           </div>
         ) : (

@@ -165,16 +165,16 @@ export const HeaderControls: FC<HeaderControlsProps> = ({
         <div className="brand-block flex min-w-0 shrink-0 items-center gap-2.5">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-indigo-600 text-white shadow-sm">
             <img
-              alt="ForgeByteX"
+              alt="VLNTOX"
               className="h-6 w-6"
-              src="/favicon.svg"
+              src="/vlntox-favicon.svg"
             />
           </div>
 
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex min-w-0 flex-col">
               <span className="truncate text-sm font-bold leading-tight tracking-tight text-primary sm:text-base">
-                ForgeByteX
+                VLNTOX
               </span>
               <span className="hidden text-[10px] leading-tight text-muted sm:block">
                 by TAKSYA STUDIO

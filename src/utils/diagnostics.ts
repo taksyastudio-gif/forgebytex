@@ -1,7 +1,7 @@
 import type * as monaco from 'monaco-editor';
 
 const MARKER_OWNER = 'forgebytex';
-const MARKER_SOURCE = 'ForgeByteX Error Doctor';
+const MARKER_SOURCE = 'VLNTOX Error Doctor';
 
 export interface CompilerDiagnostic {
   line: number;
@@ -57,7 +57,7 @@ export const mapDiagnosticsToMarkers = (
 };
 
 /**
- * Clears only the markers owned by ForgeByteX.
+ * Clears only the markers owned by VLNTOX.
  */
 export const clearMonacoMarkers = (
   monacoInstance: typeof monaco,

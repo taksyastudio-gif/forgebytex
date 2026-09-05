@@ -158,7 +158,7 @@ export class PythonClient {
 
     pendingExecution.resolve({
       success: false,
-      output: '[ForgeByteX] Execution stopped.',
+      output: '[VLNTOX] Execution stopped.',
       error: 'Execution stopped by the user.',
       exitCode: null,
       status: 'stopped',

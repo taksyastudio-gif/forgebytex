@@ -7,7 +7,7 @@ import {
 import type { SupportedLanguage } from '../types/byteplay';
 
 const MARKER_OWNER = 'forgebytex';
-const MARKER_SOURCE = 'ForgeByteX Error Doctor';
+const MARKER_SOURCE = 'VLNTOX Error Doctor';
 
 /**
  * Parses one local diagnostic and applies it to the active Monaco model.
@@ -85,7 +85,7 @@ export function applyMonacoMarkers(
 }
 
 /**
- * Clears only markers created by ForgeByteX.
+  * Clears only markers created by VLNTOX.
  */
 export function clearMonacoMarkers(
   monacoInstance: typeof monaco,

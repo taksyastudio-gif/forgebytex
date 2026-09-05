@@ -59,7 +59,7 @@ export const NebCurriculumModal: FC<NebCurriculumModalProps> = ({
               NEB Grade 12 Curriculum Library
             </h2>
             <p className="mt-1 text-xs text-muted">
-              Load a starter program into the current ForgeByteX workspace.
+              Load a starter program into the current VLNTOX workspace.
             </p>
           </div>
 

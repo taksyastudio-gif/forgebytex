@@ -71,7 +71,7 @@ const INITIAL_FILES: ForgeProjectFile[] = [
     content: `#include <stdio.h>
 
 int main(void) {
-    printf("Hello ForgeByteX from C!\\n");
+    printf("Hello VLNTOX from C!\\n");
     return 0;
 }
 `,
@@ -83,7 +83,7 @@ int main(void) {
     content: `#include <iostream>
 
 int main() {
-    std::cout << "Hello ForgeByteX from C++!" << std::endl;
+    std::cout << "Hello VLNTOX from C++!" << std::endl;
     return 0;
 }
 `,
@@ -92,7 +92,7 @@ int main() {
     id: 'main-py',
     name: 'main.py',
     language: 'python',
-    content: `print("Hello ForgeByteX from Python!")
+    content: `print("Hello VLNTOX from Python!")
 
 for index in range(5):
     print(index)
@@ -108,12 +108,12 @@ for index in range(5):
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ForgeByteX Web Project</title>
+   <title>VLNTOX — Browser Coding Workspace</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <main class="card">
-    <h1>Hello ForgeByteX!</h1>
+    <h1>Hello VLNTOX!</h1>
     <p>Edit index.html, style.css, and script.js together.</p>
     <button id="demo-button" type="button">Click me</button>
     <p id="message"></p>
@@ -180,7 +180,7 @@ button?.addEventListener('click', () => {
 ];
 
 const INITIAL_TERMINAL_LOGS = [
-  'ForgeByteX ready. Open a file and click Run Code.',
+  'VLNTOX ready. Open a file and click Run Code.',
   'Tip: C and Python input is typed directly into this terminal.',
 ];
 
@@ -389,7 +389,7 @@ export const App = (): ReactElement => {
       name: fileName,
       language,
       isWebProjectFile: true,
-      content: '// New ForgeByteX file\n',
+      content: '// New VLNTOX file\n',
     };
 
     setFiles((currentFiles) => [
@@ -505,7 +505,7 @@ export const App = (): ReactElement => {
 
       if (!sent) {
         appendTerminalLog(
-          '[ForgeByteX] No program is currently waiting for input.',
+          '[VLNTOX] No program is currently waiting for input.',
         );
       }
     },
@@ -526,7 +526,7 @@ export const App = (): ReactElement => {
       setExecutionStatus('stopped');
       setErrorOutput('');
       appendTerminalLog(
-        '[ForgeByteX] Execution stopped by the user.',
+        '[VLNTOX] Execution stopped by the user.',
       );
       return;
     }
@@ -675,7 +675,7 @@ export const App = (): ReactElement => {
     const buggyContent =
       activeFile.language === 'html'
         ? `<div>
-  <h1>Broken ForgeByteX sample</h1>
+   <h1>Broken VLNTOX sample</h1>
   <p>This HTML is intentionally incomplete.
 </div>`
         : activeFile.language === 'python'

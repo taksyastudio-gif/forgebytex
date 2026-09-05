@@ -52,7 +52,7 @@ export type WorkspaceLayout =
   | 'fullscreen';
 
 /**
- * Source file managed by the ForgeByteX workspace.
+ * Source file managed by the VLNTOX workspace.
  *
  * Project state remains the source of truth; Monaco models are derived from it.
  */

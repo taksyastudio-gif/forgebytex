@@ -19,7 +19,7 @@ const rootElement = document.getElementById('root');
 
 if (!rootElement) {
   throw new Error(
-    'ForgeByteX could not start because the root element is missing.',
+    'VLNTOX could not start because the root element is missing.',
   );
 }
 

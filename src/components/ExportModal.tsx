@@ -280,7 +280,7 @@ export const ExportModal: FC<ExportModalProps> = ({
         }
 
         const subject = encodeURIComponent(
-          `ForgeByteX project: ${
+          `VLNTOX project: ${
             activeFile?.name ?? 'source code'
           }`,
         );
@@ -380,7 +380,7 @@ export const ExportModal: FC<ExportModalProps> = ({
               className="text-lg font-bold text-primary"
               id="export-modal-title"
             >
-              Export ForgeByteX Project
+               Export VLNTOX Project
             </h2>
 
             <p className="mt-1 text-xs text-secondary">
@@ -422,7 +422,7 @@ export const ExportModal: FC<ExportModalProps> = ({
             checked={format === 'project'}
             description={`Download ${normalizedFiles.length} project file${
               normalizedFiles.length === 1 ? '' : 's'
-            } as a ZIP archive with a ForgeByteX manifest.`}
+            } as a ZIP archive with a VLNTOX manifest.`}
             disabled={normalizedFiles.length === 0}
             icon={<FileArchive size={15} />}
             onSelect={() => setFormat('project')}
